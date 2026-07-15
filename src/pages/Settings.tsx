@@ -45,7 +45,7 @@ export const Settings = () => {
   const { colorMode, toggleColorMode } = useColorMode();
 
   return (
-    <VStack align='stretch' spacing={6} maxW='640px'>
+    <VStack align='stretch' spacing={6} >
       <Box>
         <Heading fontSize={{ base: 'xl', md: '2xl' }}>Settings</Heading>
       </Box>
