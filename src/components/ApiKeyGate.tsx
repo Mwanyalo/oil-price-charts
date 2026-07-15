@@ -38,7 +38,7 @@ export const ApiKeyGate = () => {
           transform='rotate(45deg)'
         />
         <Heading fontFamily='heading' fontSize='lg' mt={2}>
-          Crude Signal
+          Oil Prices
         </Heading>
       </VStack>
 
@@ -67,8 +67,7 @@ export const ApiKeyGate = () => {
         </Box>
 
         <Text fontSize='sm' color='textMuted'>
-          This dashboard only shows real market data — there's no demo mode to
-          fall back on. Get a free key and you'll be trading blind no longer.
+         Get a free key in order to view the dashboard.
         </Text>
 
         <VStack align='stretch' spacing={2} fontSize='sm'>
@@ -89,7 +88,7 @@ export const ApiKeyGate = () => {
           <HStack align='start'>
             <Text fontWeight='700'>2.</Text>
             <Text>
-              Copy <Code>.env.example</Code> to <Code>.env</Code> and set:
+              Update <Code>.env</Code> and set:
             </Text>
           </HStack>
           <Box
@@ -102,6 +101,9 @@ export const ApiKeyGate = () => {
           >
             <Text fontFamily='mono' fontSize='xs'>
               VITE_OILPRICE_API_KEY=your_token_here
+            </Text>
+             <Text fontFamily='mono' fontSize='xs'>
+              VITE_BASE_API=oilprice_api_url
             </Text>
           </Box>
           <HStack>
