@@ -1,16 +1,19 @@
-# Oil Prices Dashboard
+# rr-vite-express
 
-A small client-side dashboard showing oil price data using the OilPriceAPI. Built with
-React + TypeScript and Vite. The app runs entirely in the browser and requires an API key
-to fetch live data; without a key the app shows a setup screen.
+A React Router + Vite + Express starter app for a commodity price dashboard. The app includes a server-rendered shell, live-updating watchlist dashboard, market catalog, history charts, and theme settings.
+
+## Features
+
+- React Router v8 routes with server-side rendering support
+- Vite-powered development and build workflow
+- Express server for production and dev middleware mode
+- Watchlist stored in `localStorage`
+- Live price simulation with trend charts and sparkline mini-charts
+- Category filtering, search, and settings
 
 ## Quick Start
 
-Requirements:
-- Node.js 18+ (or compatible)
-- npm (or yarn/pnpm)
-
-1. Install dependencies
+Install dependencies:
 
 ```bash
 npm install
@@ -25,44 +28,39 @@ VITE_BASE_API=https://api.oilpriceapi.com
 
 Get a free API key at https://www.oilpriceapi.com/ (or use your own provider).
 
-3. Start the dev server
+Run the app in development mode:
 
 ```bash
 npm run dev
 ```
 
-Open http://localhost:5173 in a browser.
+Build for production:
 
-## Useful Scripts
+```bash
+npm run build
+```
 
-- `npm run dev` — start development server (Vite)
-- `npm run build` — typecheck and build for production
-- `npm run preview` — preview the production build
-- `npm run typecheck` — run TypeScript check only
+Start the production server:
 
-## Environment Variables
+```bash
+npm run start
+```
 
-- `VITE_OILPRICE_API_KEY` — your OilPriceAPI key
-- `VITE_BASE_API` — base URL for the API (defaults to OilPriceAPI)
+## Scripts
 
-After changing `.env` restart the dev server so Vite picks up the new values.
+- `npm run dev` - start the React Router/Vite dev server
+- `npm run build` - build the production client/server output
+- `npm run start` - run the Express server in production mode
+- `npm run typecheck` - generate route types and run TypeScript type checking
 
-## Project Layout (high level)
+## Project Structure
 
-- `src/` — application source
-- `src/api/oilApi.ts` — API client
-- `src/components/` — UI components
-- `src/pages/` — route pages (Dashboard, History, Markets, Settings)
-- `src/providers/DataProvider.tsx` — data provider and context
-
-See the source files for more detail.
-
-## Troubleshooting
-
-- Empty or setup screen — check `.env` and that `VITE_OILPRICE_API_KEY` is set.
-- Type errors — run `npm run typecheck` to see TypeScript issues.
-
-## Contributing
-
-Pull requests welcome. Please open an issue first if you plan to make larger changes.
+- `app/` - application source code
+- `app/routes/` - route components and loaders
+- `app/components/` - shared UI components
+- `app/context/` - React context providers
+- `app/data/` - catalog and mock price generation
+- `server.js` - Express server entrypoint
+- `vite.config.ts` - Vite configuration
+- `tsconfig.json` - TypeScript configuration
 
