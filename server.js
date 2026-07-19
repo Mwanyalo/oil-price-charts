@@ -1,40 +1,43 @@
-import { createRequestHandler } from "@react-router/express";
-import compression from "compression";
-import express from "express";
-import morgan from "morgan";
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' });
+dotenv.config();
+import { createRequestHandler } from '@react-router/express';
+import compression from 'compression';
+import express from 'express';
+import morgan from 'morgan';
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = process.env.NODE_ENV === 'production';
 
 const app = express();
 app.use(compression());
-app.disable("x-powered-by");
+app.disable('x-powered-by');
 
 let viteDevServer;
 if (!isProduction) {
-  const vite = await import("vite");
+  const vite = await import('vite');
   viteDevServer = await vite.createServer({
     server: { middlewareMode: true },
   });
   app.use(viteDevServer.middlewares);
 } else {
   app.use(
-    "/assets",
-    express.static("build/client/assets", { immutable: true, maxAge: "1y" })
+    '/assets',
+    express.static('build/client/assets', { immutable: true, maxAge: '1y' }),
   );
-  app.use(express.static("build/client", { maxAge: "1h" }));
+  app.use(express.static('build/client', { maxAge: '1h' }));
 }
 
-app.use(morgan("tiny"));
+app.use(morgan('tiny'));
 
 const build = viteDevServer
-  ? () => viteDevServer.ssrLoadModule("virtual:react-router/server-build")
-  : await import("./build/server/index.js");
+  ? () => viteDevServer.ssrLoadModule('virtual:react-router/server-build')
+  : await import('./build/server/index.js');
 
 app.all(
-  "*splat",
+  '*splat',
   createRequestHandler({
     build,
-  })
+  }),
 );
 
 const port = process.env.PORT || 3000;

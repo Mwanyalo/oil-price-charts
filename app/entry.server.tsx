@@ -18,6 +18,8 @@ export default function handleRequest(
     let shellRendered = false;
     const userAgent = request.headers.get('user-agent');
 
+    // Bots wait for the FULL render (better for SEO snapshots),
+    // real browsers get the shell streamed immediately.
     const readyOption: 'onAllReady' | 'onShellReady' =
       (userAgent && isbot(userAgent)) || routerContext.isSpaMode
         ? 'onAllReady'

@@ -1,9 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { DEFAULT_WATCHLIST } from '../data/catalog';
+import { useCatalog } from './catalog';
 
 const STORAGE_KEY = 'watchlist:codes';
 const MAX_SIZE = 6;
-
 interface WatchlistState {
   codes: string[];
   isTracked: (code: string) => boolean;
@@ -12,62 +11,70 @@ interface WatchlistState {
   atLimit: boolean;
   maxSize: number;
 }
-
 const WatchlistContext = createContext<WatchlistState | null>(null);
 
 export function WatchlistProvider({ children }: { children: React.ReactNode }) {
-  const [codes, setCodes] = useState<string[]>(DEFAULT_WATCHLIST);
+  const { commodities, byCode } = useCatalog();
+  const [codes, setCodes] = useState<string[]>([]);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) setCodes(parsed);
-      }
-    } catch {}
+      const parsed = JSON.parse(
+        window.localStorage.getItem(STORAGE_KEY) || '[]',
+      );
+      if (Array.isArray(parsed))
+        setCodes(
+          parsed.filter((code): code is string => typeof code === 'string'),
+        );
+    } catch {
+      /* ignore malformed storage */
+    }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(codes));
-    } catch {
-      //private mode
-    }
-  }, [codes]);
+    if (!commodities.length) return;
+    setCodes((current) => {
+      const valid = current.filter((code) => byCode[code]);
+      return valid.length
+        ? valid
+        : commodities.slice(0, 3).map((commodity) => commodity.code);
+    });
+  }, [commodities, byCode]);
 
-  const value = useMemo<WatchlistState>(() => {
-    const isTracked = (code: string) => codes.includes(code);
-    return {
+  useEffect(() => {
+    if (hydrated)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(codes));
+  }, [codes, hydrated]);
+  const value = useMemo<WatchlistState>(
+    () => ({
       codes,
-      isTracked,
+      isTracked: (code) => codes.includes(code),
       atLimit: codes.length >= MAX_SIZE,
       maxSize: MAX_SIZE,
-      untrack: (code: string) =>
-        setCodes((prev) =>
-          prev.length > 1 ? prev.filter((c) => c !== code) : prev,
+      untrack: (code) =>
+        setCodes((current) => current.filter((item) => item !== code)),
+      toggle: (code) =>
+        setCodes((current) =>
+          current.includes(code)
+            ? current.filter((item) => item !== code)
+            : current.length >= MAX_SIZE
+              ? current
+              : [...current, code],
         ),
-      toggle: (code: string) =>
-        setCodes((prev) => {
-          if (prev.includes(code)) {
-            return prev.length > 1 ? prev.filter((c) => c !== code) : prev;
-          }
-          if (prev.length >= MAX_SIZE) return prev;
-          return [...prev, code];
-        }),
-    };
-  }, [codes]);
-
+    }),
+    [codes],
+  );
   return (
     <WatchlistContext.Provider value={value}>
       {children}
     </WatchlistContext.Provider>
   );
 }
-
 export function useWatchlist(): WatchlistState {
-  const ctx = useContext(WatchlistContext);
-  if (!ctx)
+  const context = useContext(WatchlistContext);
+  if (!context)
     throw new Error('useWatchlist must be used within WatchlistProvider');
-  return ctx;
+  return context;
 }

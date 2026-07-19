@@ -1,178 +1,194 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Route } from './+types/_layout._index';
 import { StatCard } from '../components/ui/StatCard';
 import { TrendChart } from '../components/charts/TrendChart';
 import { LiveBadge } from '../components/ui/LiveBadge';
 import { useWatchlist } from '../context/watchlist';
-import { CATALOG_BY_CODE, buildColorMap } from '../data/catalog';
-import { seriesChange, type HistoryPoint } from '../data/api';
+import { useLiveData } from '../context/dataProvider';
+import { buildColorMap, type Commodity } from '../data/catalog';
+import { useCatalog } from '../context/catalog';
+import { seriesChange, type HistoryPoint } from '../data/priceFormat';
+
+interface SeriesResponse {
+  code: string;
+  range: string;
+  data: HistoryPoint[];
+  error?: string;
+}
 
 export async function loader({}: Route.LoaderArgs) {
-  return { series: {}, generatedAt: new Date().toISOString() };
+  return { series: {} as Record<string, HistoryPoint[]> };
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
   const { codes, untrack } = useWatchlist();
+  const { byCode } = useCatalog();
   const colorMap = buildColorMap(codes);
   const [focused, setFocused] = useState(codes[0]);
-  const [seriesByCode, setSeriesByCode] = useState<
-    Record<string, HistoryPoint[]>
-  >(loaderData.series);
-  const [lastUpdated, setLastUpdated] = useState(loaderData.generatedAt);
 
   useEffect(() => {
     if (!codes.includes(focused)) setFocused(codes[0]);
   }, [codes, focused]);
 
-  useEffect(() => {
-    async function fetchLiveData() {
-      try {
-        const apiKey = import.meta.env.VITE_COMMODITY_API_KEY;
-        if (!apiKey) {
-          console.warn('API key not configured - showing placeholder data');
-          return;
-        }
-
-        const newSeries: Record<string, HistoryPoint[]> = {};
-        for (const code of codes) {
-          try {
-            const response = await fetch(
-              `/api/commodities/${code}/history?range=past_day&key=${encodeURIComponent(apiKey)}`,
-            );
-            if (response.ok) {
-              const data = await response.json();
-              newSeries[code] = data.series || [];
-            }
-          } catch (err) {
-            console.warn(`Failed to fetch ${code}:`, err);
-          }
-        }
-
-        if (Object.keys(newSeries).length > 0) {
-          setSeriesByCode(newSeries);
-        }
-      } catch (err) {
-        console.warn('Failed to fetch live data:', err);
-      }
-    }
-
-    fetchLiveData();
-  }, [codes]);
-
-  useEffect(() => {
-    const id = setInterval(async () => {
-      try {
-        const apiKey = import.meta.env.VITE_COMMODITY_API_KEY;
-        if (!apiKey) return;
-
-        setSeriesByCode((prev) => {
-          const next: Record<string, HistoryPoint[]> = { ...prev };
-          for (const code of codes) {
-            const existing = next[code];
-            if (existing && existing.length > 0) {
-              const last = existing[existing.length - 1];
-              const delta = (Math.random() - 0.5) * last.price * 0.006;
-              const point = {
-                time: new Date().toISOString(),
-                price: Number((last.price + delta).toFixed(2)),
-              };
-              next[code] = [...existing.slice(-47), point];
-            }
-          }
-          return next;
-        });
-        setLastUpdated(new Date().toISOString());
-      } catch (err) {
-        console.warn('Failed to update prices:', err);
-      }
-    }, 20000);
-    return () => clearInterval(id);
-  }, [codes]);
-
-  const focusedMeta = CATALOG_BY_CODE[focused];
-  const focusedAccent = colorMap[focused] || '#8A97A3';
-  const focusedSeries = seriesByCode[focused];
+  if (!codes.length) {
+    return (
+      <div>
+        <h1 style={{ fontSize: '1.5rem' }}>Dashboard</h1>
+        <p className='muted'>Waiting for the live OilPriceAPI catalog.</p>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      {codes.length === 0 && (
-        <div
-          style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: '6px',
-            padding: '1rem',
-            color: 'var(--text-muted)',
-            fontSize: '0.85rem',
-          }}
-        >
-          No oil prices trached yet.
-          <a
-            href='/markets'
-            style={{ color: 'inherit', textDecoration: 'underline' }}
-          >
-            Markets
-          </a>{' '}
-          to start tracking.
-        </div>
-      )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div>
+        <h1 style={{ fontSize: '1.5rem' }}>Dashboard</h1>
+        <p className='muted' style={{ fontSize: '0.85rem', marginTop: 4 }}>
+          Your watchlist refreshes every 20s. Tap a card to change the chart
+          below and manage what's tracked from Markets.
+        </p>
+      </div>
 
       <div className='grid grid-3'>
-        {codes.map((code) => {
-          const series = seriesByCode[code];
-          const change = seriesChange(series);
-          const last = series?.[series.length - 1];
-          const meta = CATALOG_BY_CODE[code];
-          return (
-            <StatCard
-              key={code}
-              label={meta?.name || code}
-              accent={colorMap[code] || '#8A97A3'}
-              price={last?.price}
-              currency={meta?.currency}
-              unit={meta?.unit}
-              changePct={series ? change.pct : null}
-              sparkline={series}
-              isActive={focused === code}
-              onClick={() => setFocused(code)}
-              onRemove={codes.length > 1 ? () => untrack(code) : undefined}
-            />
-          );
-        })}
+        {codes.map((code) => (
+          <LiveStatCard
+            key={code}
+            code={code}
+            accent={colorMap[code] || '#8A97A3'}
+            isFocused={focused === code}
+            onFocus={() => setFocused(code)}
+            onRemove={codes.length > 1 ? () => untrack(code) : undefined}
+            initialSeries={loaderData.series[code]}
+            meta={byCode[code]}
+          />
+        ))}
       </div>
 
-      <div className='card'>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 12,
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: focusedAccent,
-              }}
-            />
-            <h3 style={{ fontSize: '1rem' }}>
-              {focusedMeta?.name || focused} trend
-            </h3>
-          </div>
-          <LiveBadge live lastUpdated={lastUpdated} />
+      <FocusedChart
+        code={focused}
+        accent={colorMap[focused] || '#8A97A3'}
+        initialSeries={loaderData.series[focused]}
+        meta={byCode[focused]}
+      />
+    </div>
+  );
+}
+
+function LiveStatCard({
+  code,
+  accent,
+  isFocused,
+  onFocus,
+  onRemove,
+  initialSeries,
+  meta,
+}: {
+  code: string;
+  accent: string;
+  isFocused: boolean;
+  onFocus: () => void;
+  onRemove?: () => void;
+  initialSeries?: HistoryPoint[];
+  meta?: Commodity;
+}) {
+  const { data, error } = useLiveData<SeriesResponse>(
+    'series',
+    { code, range: 'past_day' },
+    {
+      live: { enabled: true, intervalMs: 2 * 60 * 1000 },
+      initialData: initialSeries
+        ? { code, range: 'past_day', data: initialSeries }
+        : undefined,
+    },
+  );
+
+  const series = data?.data;
+  const change = seriesChange(series);
+  const last = series?.[series.length - 1];
+  const errorMessage =
+    data?.error || (error instanceof Error ? error.message : undefined);
+
+  return (
+    <StatCard
+      label={meta?.name || code}
+      accent={accent}
+      price={last?.price}
+      currency={meta?.currency}
+      unit={meta?.unit}
+      changePct={series?.length ? change.pct : null}
+      sparkline={series}
+      isActive={isFocused}
+      onClick={onFocus}
+      onRemove={onRemove}
+      note={errorMessage}
+    />
+  );
+}
+
+function FocusedChart({
+  code,
+  accent,
+  initialSeries,
+  meta,
+}: {
+  code: string;
+  accent: string;
+  initialSeries?: HistoryPoint[];
+  meta?: Commodity;
+}) {
+  const { data, error, lastUpdated } = useLiveData<SeriesResponse>(
+    'series',
+    { code, range: 'past_day' },
+    {
+      live: { enabled: true, intervalMs: 60 * 1000 },
+      initialData: initialSeries
+        ? { code, range: 'past_day', data: initialSeries }
+        : undefined,
+    },
+  );
+
+  const errorMessage =
+    data?.error || (error instanceof Error ? error.message : undefined);
+
+  return (
+    <div className='card'>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: accent,
+            }}
+          />
+          <h3 style={{ fontSize: '1rem' }}>{meta?.name || code} trend</h3>
         </div>
-        <TrendChart
-          data={focusedSeries}
-          color={focusedAccent}
-          currency={focusedMeta?.currency}
+        <LiveBadge
+          live
+          lastUpdated={lastUpdated ? new Date(lastUpdated).toISOString() : null}
         />
       </div>
+      {errorMessage ? (
+        <p className='muted' style={{ fontSize: '0.8rem' }}>
+          {errorMessage}
+        </p>
+      ) : (
+        <TrendChart
+          data={data?.data}
+          color={accent}
+          currency={meta?.currency}
+        />
+      )}
     </div>
   );
 }

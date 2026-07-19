@@ -14,6 +14,15 @@ type Pages = {
   "/": {
     params: {};
   };
+  "/resources/commodities": {
+    params: {};
+  };
+  "/resources/latest": {
+    params: {};
+  };
+  "/resources/series": {
+    params: {};
+  };
   "/settings": {
     params: {};
   };
@@ -28,7 +37,19 @@ type Pages = {
 type RouteFiles = {
   "root.tsx": {
     id: "root";
-    page: "/" | "/settings" | "/history" | "/markets";
+    page: "/" | "/resources/commodities" | "/resources/latest" | "/resources/series" | "/settings" | "/history" | "/markets";
+  };
+  "routes/resources.commodities.tsx": {
+    id: "routes/resources.commodities";
+    page: "/resources/commodities";
+  };
+  "routes/resources.latest.tsx": {
+    id: "routes/resources.latest";
+    page: "/resources/latest";
+  };
+  "routes/resources.series.tsx": {
+    id: "routes/resources.series";
+    page: "/resources/series";
   };
   "routes/_layout.tsx": {
     id: "routes/_layout";
@@ -54,6 +75,9 @@ type RouteFiles = {
 
 type RouteModules = {
   "root": typeof import("./app/root.tsx");
+  "routes/resources.commodities": typeof import("./app/routes/resources.commodities.tsx");
+  "routes/resources.latest": typeof import("./app/routes/resources.latest.tsx");
+  "routes/resources.series": typeof import("./app/routes/resources.series.tsx");
   "routes/_layout": typeof import("./app/routes/_layout.tsx");
   "routes/_layout.settings": typeof import("./app/routes/_layout.settings.tsx");
   "routes/_layout.history": typeof import("./app/routes/_layout.history.tsx");

@@ -1,15 +1,15 @@
 # rr-vite-express
 
-A React Router + Vite + Express starter app for a commodity price dashboard. The app includes a server-rendered shell, live-updating watchlist dashboard, market catalog, history charts, and theme settings.
+A React Router 8 (SSR/framework mode) + Vite + Express starter, built out into a small
+live oil-price dashboard to demonstrate the stack end-to-end: server rendering, resource
+routes, a centralized live-data provider, and a real third-party API integration.
 
-## Features
+## Stack
 
-- React Router v8 routes with server-side rendering support
-- Vite-powered development and build workflow
-- Express server for production and dev middleware mode
-- Watchlist stored in `localStorage`
-- Live price simulation with trend charts and sparkline mini-charts
-- Category filtering, search, and settings
+- **React Router 8** — routing, SSR, and data loading (`loader`s + resource routes)
+- **Vite** — dev server and bundling, via `@react-router/dev`'s Vite plugin
+- **Express** — the actual HTTP server (`server.js`), with `compression` + `morgan`
+- **[OilPriceAPI](https://www.oilpriceapi.com/)** — real commodity price data
 
 ## Quick Start
 
@@ -46,21 +46,30 @@ Start the production server:
 npm run start
 ```
 
-## Scripts
+````
 
-- `npm run dev` - start the React Router/Vite dev server
-- `npm run build` - build the production client/server output
-- `npm run start` - run the Express server in production mode
-- `npm run typecheck` - generate route types and run TypeScript type checking
+## Project structure
 
-## Project Structure
-
-- `app/` - application source code
-- `app/routes/` - route components and loaders
-- `app/components/` - shared UI components
-- `app/context/` - React context providers
-- `app/data/` - catalog and mock price generation
-- `server.js` - Express server entrypoint
-- `vite.config.ts` - Vite configuration
-- `tsconfig.json` - TypeScript configuration
-
+```
+app/
+  data/
+    catalog.ts             commodity list (codes verified against OilPriceAPI docs)
+    datasources.ts         DataProvider registry: id -> buildUrl
+    priceFormat.ts          pure formatting helpers (no data fetching)
+  lib/
+    oilPriceApi.server.ts    real API client, server-only
+  context/
+    dataProvider.tsx         the live-data store + useLiveData hook
+    watchlist.tsx            client-persisted tracked commodities (localStorage)
+  components/                presentational UI (StatCard, TrendChart, Sparkline, ...)
+  routes/
+    _layout.tsx               app shell: sidebar/topbar/ticker, wraps everything
+    _layout._index.tsx        Dashboard
+    _layout.markets.tsx       Markets (browse + track)
+    _layout.history.tsx       History (URL-param-driven loader)
+    _layout.settings.tsx      Settings
+    resources.series.tsx      JSON resource route: GET /resources/series
+    resources.latest.tsx      JSON resource route: GET /resources/latest
+  entry.client.tsx / entry.server.tsx / root.tsx
+server.js                     Express host
+```

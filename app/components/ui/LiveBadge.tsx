@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { formatRelativeTime } from '../../data/utils';
+import { useEffect, useState } from "react";
+import { formatRelativeTime } from "../../data/priceFormat";
 
 interface LiveBadgeProps {
   live: boolean;
@@ -7,6 +7,7 @@ interface LiveBadgeProps {
 }
 
 export function LiveBadge({ live, lastUpdated }: LiveBadgeProps) {
+  // re-render every few seconds so "12s ago" keeps advancing
   const [, tick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 5000);
@@ -14,24 +15,18 @@ export function LiveBadge({ live, lastUpdated }: LiveBadgeProps) {
   }, []);
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span
         style={{
           width: 6,
           height: 6,
-          borderRadius: '50%',
-          background: live ? '#5fa87c' : '#5a5a5f',
+          borderRadius: "50%",
+          background: live ? "#5fa87c" : "#5a5a5f",
         }}
-        className={live ? 'pulse-dot' : undefined}
+        className={live ? "pulse-dot" : undefined}
       />
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: '0.78rem',
-          color: '#8b8b90',
-        }}
-      >
-        {live ? 'LIVE' : 'PAUSED'} · {formatRelativeTime(lastUpdated)}
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.78rem", color: "#8b8b90" }}>
+        {live ? "LIVE" : "PAUSED"} · {formatRelativeTime(lastUpdated)}
       </span>
     </span>
   );

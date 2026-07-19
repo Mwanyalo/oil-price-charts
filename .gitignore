@@ -1,8 +1,16 @@
 # Node.js dependencies
 node_modules/
 
-# Vite build output
+# pnpm store
+.pnpm-store/
+
+# React Router dev cache
+.react-router/
+
+# Build outputs
 dist/
+build/
+out/
 
 # Local environment variables
 .env
@@ -28,3 +36,4 @@ coverage/
 
 tsconfig.app.tsbuildinfo
 tsconfig.node.tsbuildinfo
+

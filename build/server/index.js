@@ -3,8 +3,8 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { Form, Links, Meta, NavLink, Outlet, Scripts, ScrollRestoration, ServerRouter, UNSAFE_withComponentProps, UNSAFE_withErrorBoundaryProps, isRouteErrorResponse, useNavigation, useSubmit } from "react-router";
 import { isbot } from "isbot";
 import { renderToPipeableStream } from "react-dom/server";
-import { jsx, jsxs } from "react/jsx-runtime";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 //#region \0rolldown/runtime.js
 var __defProp = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
@@ -55,6 +55,241 @@ function handleRequest(request, responseStatusCode, responseHeaders, routerConte
 	});
 }
 //#endregion
+//#region app/data/datasources.ts
+var DATASOURCES = {
+	series: {
+		id: "series",
+		buildUrl: (params) => `/resources/series?code=${encodeURIComponent(params.code)}&range=${encodeURIComponent(params.range)}`
+	},
+	latest: {
+		id: "latest",
+		buildUrl: (params) => `/resources/latest?codes=${encodeURIComponent(params.codes.join(","))}`
+	},
+	commodities: {
+		id: "commodities",
+		buildUrl: () => "/resources/commodities"
+	}
+};
+//#endregion
+//#region app/context/dataProvider.tsx
+var GLOBAL_POLLING_KEY = "live-polling:enabled";
+/**
+* Owns every live data key: who's fetched, who's polling, and at what rate.
+* Components never fetch directly — they declare a datasource id + params and
+* their own live preference, and this store dedupes the rest.
+*
+* Two cross-cutting controls sit above individual subscriptions:
+*  - tab visibility: polling pauses while the tab is hidden, and does one
+*    catch-up fetch per active key when it becomes visible again
+*  - a global on/off switch (Settings), for killing all polling at once —
+*    useful on a metered free-tier API budget
+*/
+var DataStore = class {
+	entries = /* @__PURE__ */ new Map();
+	pageVisible = true;
+	globalPollingEnabled = true;
+	globalListeners = /* @__PURE__ */ new Set();
+	constructor() {
+		if (typeof document !== "undefined") {
+			this.pageVisible = document.visibilityState !== "hidden";
+			document.addEventListener("visibilitychange", () => {
+				const wasVisible = this.pageVisible;
+				this.pageVisible = document.visibilityState !== "hidden";
+				if (this.pageVisible && !wasVisible) this.entries.forEach((entry, key) => {
+					if (this.effectiveInterval(entry) > 0) this.fetchNow(entry.sourceId, key, entry.params);
+				});
+				this.rescheduleAll();
+			});
+		}
+	}
+	ensure(key, sourceId, params) {
+		let entry = this.entries.get(key);
+		if (!entry) {
+			entry = {
+				sourceId,
+				params,
+				snapshot: {
+					data: void 0,
+					error: void 0,
+					isLoading: false,
+					updatedAt: null
+				},
+				listeners: /* @__PURE__ */ new Set(),
+				subscribers: /* @__PURE__ */ new Map(),
+				timer: null,
+				inFlight: null
+			};
+			this.entries.set(key, entry);
+		}
+		return entry;
+	}
+	patch(key, patch) {
+		const entry = this.entries.get(key);
+		if (!entry) return;
+		entry.snapshot = {
+			...entry.snapshot,
+			...patch
+		};
+		entry.listeners.forEach((notify) => notify());
+	}
+	/** Seed a key with SSR/loader data so the first render never re-fetches. */
+	seed(key, sourceId, params, data) {
+		if (this.ensure(key, sourceId, params).snapshot.data === void 0) this.patch(key, {
+			data,
+			updatedAt: Date.now()
+		});
+	}
+	getSnapshot(key, sourceId, params) {
+		return this.ensure(key, sourceId, params).snapshot;
+	}
+	async fetchNow(sourceId, key, params) {
+		const entry = this.entries.get(key);
+		if (!entry || entry.inFlight) return entry?.inFlight;
+		const config = DATASOURCES[sourceId];
+		if (!config) return;
+		this.patch(key, { isLoading: true });
+		const request = (async () => {
+			try {
+				const url = config.buildUrl(params);
+				const headers = "headers" in config ? config.headers : void 0;
+				const res = await fetch(url, { headers });
+				const json = await res.json().catch(() => null);
+				if (!res.ok && !json) throw new Error(`${sourceId} request failed: ${res.status}`);
+				this.patch(key, {
+					data: json,
+					error: void 0,
+					isLoading: false,
+					updatedAt: Date.now()
+				});
+			} catch (error) {
+				this.patch(key, {
+					error,
+					isLoading: false
+				});
+			} finally {
+				entry.inFlight = null;
+			}
+		})();
+		entry.inFlight = request;
+		return request;
+	}
+	/** The fastest interval any subscriber asked for, or 0 if polling is paused/off/empty. */
+	effectiveInterval(entry) {
+		if (!this.globalPollingEnabled || !this.pageVisible) return 0;
+		const active = Array.from(entry.subscribers.values()).filter((ms) => ms > 0);
+		return active.length ? Math.min(...active) : 0;
+	}
+	reschedule(key) {
+		const entry = this.entries.get(key);
+		if (!entry) return;
+		if (entry.timer) {
+			clearInterval(entry.timer);
+			entry.timer = null;
+		}
+		const interval = this.effectiveInterval(entry);
+		if (interval <= 0) return;
+		entry.timer = setInterval(() => this.fetchNow(entry.sourceId, key, entry.params), interval);
+	}
+	rescheduleAll() {
+		this.entries.forEach((_entry, key) => this.reschedule(key));
+	}
+	subscribe(sourceId, key, params, subscriberId, intervalMs, onChange) {
+		const entry = this.ensure(key, sourceId, params);
+		entry.listeners.add(onChange);
+		entry.subscribers.set(subscriberId, intervalMs);
+		if (entry.snapshot.data === void 0 && !entry.inFlight) this.fetchNow(sourceId, key, params);
+		this.reschedule(key);
+		return () => {
+			entry.listeners.delete(onChange);
+			entry.subscribers.delete(subscriberId);
+			this.reschedule(key);
+		};
+	}
+	setGlobalPolling(enabled) {
+		this.globalPollingEnabled = enabled;
+		try {
+			window.localStorage.setItem(GLOBAL_POLLING_KEY, enabled ? "1" : "0");
+		} catch {}
+		if (enabled) this.entries.forEach((entry, key) => {
+			if (Array.from(entry.subscribers.values()).some((ms) => ms > 0)) this.fetchNow(entry.sourceId, key, entry.params);
+		});
+		this.rescheduleAll();
+		this.globalListeners.forEach((l) => l());
+	}
+	isGlobalPollingEnabled() {
+		return this.globalPollingEnabled;
+	}
+	initGlobalPollingFromStorage() {
+		try {
+			const stored = window.localStorage.getItem(GLOBAL_POLLING_KEY);
+			if (stored !== null) {
+				this.globalPollingEnabled = stored === "1";
+				this.rescheduleAll();
+			}
+		} catch {}
+	}
+	subscribeGlobalPolling(onChange) {
+		this.globalListeners.add(onChange);
+		return () => this.globalListeners.delete(onChange);
+	}
+};
+var DataStoreContext = createContext(null);
+function DataProvider({ children }) {
+	const storeRef = useRef(null);
+	if (!storeRef.current) storeRef.current = new DataStore();
+	useEffect(() => {
+		storeRef.current?.initGlobalPollingFromStorage();
+	}, []);
+	return /* @__PURE__ */ jsx(DataStoreContext.Provider, {
+		value: storeRef.current,
+		children
+	});
+}
+function useStore() {
+	const store = useContext(DataStoreContext);
+	if (!store) throw new Error("useLiveData must be used within <DataProvider>");
+	return store;
+}
+/**
+* Subscribe to a named datasource. No fetcher to write — the provider resolves
+* `sourceId` against the registry and fetches internally. Multiple components
+* requesting the same sourceId+params share one cached entry and one poll
+* timer (running at the fastest interval any of them asked for), and polling
+* automatically pauses when the tab is hidden or the global toggle is off.
+*/
+function useLiveData(sourceId, params, options = {}) {
+	const store = useStore();
+	const subscriberId = useId();
+	const key = `${sourceId}:${JSON.stringify(params)}`;
+	const seededKeys = useRef(/* @__PURE__ */ new Set());
+	if (options.initialData !== void 0 && !seededKeys.current.has(key)) {
+		store.seed(key, sourceId, params, options.initialData);
+		seededKeys.current.add(key);
+	}
+	const live = options.live ?? { enabled: false };
+	const intervalMs = live.enabled ? live.intervalMs ?? 15e3 : 0;
+	const subscribe = useCallback((onChange) => store.subscribe(sourceId, key, params, subscriberId, intervalMs, onChange), [
+		store,
+		sourceId,
+		key,
+		subscriberId,
+		intervalMs
+	]);
+	const getSnapshot = useCallback(() => store.getSnapshot(key, sourceId, params), [
+		store,
+		key,
+		sourceId
+	]);
+	const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+	return {
+		data: snapshot.data,
+		error: snapshot.error,
+		isLoading: snapshot.isLoading,
+		lastUpdated: snapshot.updatedAt,
+		refresh: () => store.fetchNow(sourceId, key, params)
+	};
+}
+//#endregion
 //#region app/root.tsx
 var root_exports = /* @__PURE__ */ __exportAll({
 	ErrorBoundary: () => ErrorBoundary,
@@ -76,7 +311,7 @@ function Layout({ children }) {
 				name: "viewport",
 				content: "width=device-width, initial-scale=1"
 			}),
-			/* @__PURE__ */ jsx("title", { children: "Oil Prices" }),
+			/* @__PURE__ */ jsx("title", { children: "Oil Prices — rr-vite-express" }),
 			/* @__PURE__ */ jsx("link", {
 				rel: "preconnect",
 				href: "https://fonts.googleapis.com"
@@ -102,7 +337,7 @@ function Layout({ children }) {
 	});
 }
 var root_default = UNSAFE_withComponentProps(function App() {
-	return /* @__PURE__ */ jsx(Outlet, {});
+	return /* @__PURE__ */ jsx(DataProvider, { children: /* @__PURE__ */ jsx(Outlet, {}) });
 });
 var ErrorBoundary = UNSAFE_withErrorBoundaryProps(function ErrorBoundary({ error }) {
 	let message = "Oops!";
@@ -163,23 +398,25 @@ var CSS = `
   @media (min-width: 768px) { .mobile-only { display: none; } .desktop-only { display: flex; } }
 
   .ticker { overflow: hidden; border-bottom: 1px solid var(--border); background: var(--surface); }
-  .ticker-track { display: flex; gap: 2rem; padding: 0.5rem 1.5rem; white-space: nowrap; animation: ticker-scroll 30s linear infinite; width: max-content; }
+  .api-key-banner { font-size: 0.78rem; color: var(--text-muted); background: var(--surface); border-bottom: 1px solid var(--border); padding: 0.6rem 1.5rem; }
+  .api-key-banner code { font-family: var(--font-mono); background: var(--border); padding: 1px 5px; border-radius: 4px; color: var(--text-primary); }
+  @media (min-width: 768px) { .api-key-banner { padding: 0.6rem 2rem; } }  .ticker-track { display: flex; gap: 2rem; padding: 0.5rem 1.5rem; white-space: nowrap; animation: ticker-scroll 30s linear infinite; width: max-content; }
   .ticker-item { display: inline-flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--text-muted); }
   @keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.1rem; }
-  .icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.9rem; padding: 4px 6px; border-radius: 4px; transition: color 0.2s; }
-  .icon-btn:hover { color: var(--text-primary); }
+  .card { background: var(--surface); border: 1.5px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem; }
+  .chart-tooltip { position: absolute; top: 8px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 6px; background: var(--text-primary); color: var(--canvas); pointer-events: none; font-family: var(--font-mono); font-size: 0.7rem; white-space: nowrap; }
+  .chart-tooltip span { opacity: 0.72; font-family: var(--font-body); font-size: 0.65rem; }
+  .icon-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.9rem; padding: 4px 6px; border-radius: 6px; }
+  .icon-btn:hover { background: var(--border); }
 
-  .btn { font-family: var(--font-body); font-weight: 600; font-size: 0.78rem; padding: 0.35rem 0.7rem; border-radius: 4px; border: 1px solid var(--brand); background: var(--brand); color: white; cursor: pointer; transition: opacity 0.2s; }
-  .btn:hover { opacity: 0.9; }
+  .btn { font-family: var(--font-body); font-weight: 600; font-size: 0.78rem; padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid var(--brand); background: var(--brand); color: white; cursor: pointer; }
   .btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .btn-outline { background: transparent; color: var(--text-primary); border-color: var(--border); }
 
-  .badge { display: inline-block; padding: 3px 8px; border-radius: 3px; background: transparent; color: var(--text-muted); border: 1px solid var(--border); font-size: 0.65rem; font-weight: 600; white-space: nowrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--border); color: var(--text-muted); font-size: 0.65rem; font-weight: 600; white-space: nowrap; }
 
-  .pill { border-radius: 4px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; padding: 0.4rem 0.9rem; cursor: pointer; flex-shrink: 0; transition: all 0.2s; }
-  .pill:hover { border-color: var(--text-primary); color: var(--text-primary); }
+  .pill { border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; padding: 0.4rem 0.9rem; cursor: pointer; flex-shrink: 0; }
   .pill.active { background: var(--text-primary); color: var(--canvas); border-color: var(--text-primary); }
   .category-tabs { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
 
@@ -192,9 +429,174 @@ var CSS = `
   .mono { font-family: var(--font-mono); }
   select, input { font-family: var(--font-body); background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.82rem; }
 
-  .pulse-dot { animation: pulse 2s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .pulse-dot { box-shadow: 0 0 0 0 rgba(95, 168, 124, 0.55); animation: pulse 2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(95,168,124,0.55); } 70% { box-shadow: 0 0 0 6px rgba(95,168,124,0); } 100% { box-shadow: 0 0 0 0 rgba(95,168,124,0); } }
 `;
+//#endregion
+//#region app/lib/oilPriceApi.server.ts
+var BASE_URL = "https://api.oilpriceapi.com/v1";
+var OilPriceApiError = class extends Error {
+	status;
+	constructor(message, status) {
+		super(message);
+		this.name = "OilPriceApiError";
+		this.status = status;
+	}
+};
+var commodityCache = null;
+var COMMODITY_CACHE_MS = 1440 * 60 * 1e3;
+function hasApiKey() {
+	return Boolean(process.env.OILPRICEAPI_KEY);
+}
+async function apiFetch(path, params = {}) {
+	const url = new URL(`${BASE_URL}${path}`);
+	Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+	const key = process.env.OILPRICEAPI_KEY;
+	const res = await fetch(url.toString(), {
+		headers: key ? { Authorization: `Token ${key}` } : void 0,
+		signal: AbortSignal.timeout(8e3)
+	});
+	if (!res.ok) {
+		const apiError = (await res.json().catch(() => null))?.error;
+		if (res.status === 401) throw new OilPriceApiError("Missing or invalid OILPRICEAPI_KEY", 401);
+		if (res.status === 403 && apiError?.code === "EMAIL_CONFIRMATION_REQUIRED") throw new OilPriceApiError("OilPriceAPI requires email confirmation before serving more requests. Confirm your account at https://www.oilpriceapi.com/confirm", 403);
+		if (res.status === 429) throw new OilPriceApiError("OilPriceAPI rate limit hit — slow down polling", 429);
+		throw new OilPriceApiError(apiError?.message || `OilPriceAPI request failed (${res.status})`, res.status);
+	}
+	return res.json();
+}
+/**
+* Latest prices for the given codes. Uses the authenticated endpoint when
+* OILPRICEAPI_KEY is set; otherwise falls back to the public /demo/prices
+* endpoint (no key required, WTI/Brent/Nat Gas only, 20 req/hour).
+*/
+async function fetchLatestPrices(codes) {
+	const json = hasApiKey() ? await apiFetch("/prices/latest", { by_code: codes.join(",") }) : await apiFetch("/demo/prices");
+	const rows = hasApiKey() ? json.data?.prices ?? (json.data?.code ? [json.data] : []) : json.data?.prices ?? [];
+	const out = {};
+	for (const row of rows) {
+		if (!codes.includes(row.code)) continue;
+		const time = row.created_at ?? row.updated_at ?? (/* @__PURE__ */ new Date()).toISOString();
+		out[row.code] = {
+			time,
+			price: row.price
+		};
+	}
+	return out;
+}
+/** The API catalog is authoritative and changes rarely, so cache it for a day. */
+async function fetchCommodities() {
+	if (!hasApiKey()) throw new OilPriceApiError("The live commodity catalog requires OILPRICEAPI_KEY", 401);
+	if (commodityCache && commodityCache.expiresAt > Date.now()) return commodityCache.value;
+	const json = await apiFetch("/commodities");
+	const commodities = (Array.isArray(json.data) ? json.data : []).filter((item) => item?.code && item?.name).map((item) => ({
+		code: item.code,
+		name: item.name,
+		currency: item.currency || "USD",
+		category: item.category || "other",
+		description: item.description || "Live commodity from OilPriceAPI.",
+		unit: item.unit || "unit",
+		unitDescription: item.unit_description,
+		updateFrequency: item.update_frequency
+	}));
+	commodityCache = {
+		value: commodities,
+		expiresAt: Date.now() + COMMODITY_CACHE_MS
+	};
+	return commodities;
+}
+/** Raw/aggregated spot points for one commodity. Requires OILPRICEAPI_KEY. */
+async function fetchHistory(code, range) {
+	if (!hasApiKey()) throw new OilPriceApiError("Historical data requires OILPRICEAPI_KEY — the free demo endpoint only covers latest prices", 401);
+	const interval = range === "past_day" ? "1h" : "1d";
+	return ((await apiFetch(`/prices/${range}`, {
+		by_code: code,
+		interval,
+		per_page: "100"
+	})).data?.prices ?? []).map((r) => ({
+		time: r.created_at ?? (/* @__PURE__ */ new Date()).toISOString(),
+		price: r.price
+	})).sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+}
+function isOilPriceApiKeyConfigured() {
+	return hasApiKey();
+}
+//#endregion
+//#region app/routes/resources.commodities.tsx
+var resources_commodities_exports = /* @__PURE__ */ __exportAll({ loader: () => loader$5 });
+async function loader$5() {
+	try {
+		return Response.json({
+			commodities: await fetchCommodities(),
+			source: "oilpriceapi"
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Failed to fetch commodities";
+		const status = error instanceof OilPriceApiError ? error.status ?? 502 : 502;
+		return Response.json({
+			commodities: [],
+			source: "unavailable",
+			error: message
+		}, { status });
+	}
+}
+//#endregion
+//#region app/routes/resources.latest.tsx
+var resources_latest_exports = /* @__PURE__ */ __exportAll({ loader: () => loader$4 });
+async function loader$4({ request }) {
+	const codesParam = new URL(request.url).searchParams.get("codes");
+	const codes = codesParam ? codesParam.split(",").filter(Boolean) : [];
+	if (!codes.length) return Response.json({
+		updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+		prices: {}
+	});
+	try {
+		const prices = await fetchLatestPrices(codes);
+		return Response.json({
+			updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			prices
+		});
+	} catch (err) {
+		const status = err instanceof OilPriceApiError ? err.status ?? 502 : 502;
+		const message = err instanceof Error ? err.message : "Failed to fetch latest prices";
+		return Response.json({
+			updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			prices: {},
+			error: message
+		}, { status });
+	}
+}
+//#endregion
+//#region app/routes/resources.series.tsx
+var resources_series_exports = /* @__PURE__ */ __exportAll({ loader: () => loader$3 });
+async function loader$3({ request }) {
+	const url = new URL(request.url);
+	const code = url.searchParams.get("code") || "";
+	const range = url.searchParams.get("range") || "past_day";
+	if (!code) return Response.json({
+		code,
+		range,
+		data: [],
+		error: "A commodity code is required"
+	}, { status: 400 });
+	try {
+		const data = await fetchHistory(code, range);
+		return Response.json({
+			code,
+			range,
+			data
+		});
+	} catch (err) {
+		const status = err instanceof OilPriceApiError ? err.status ?? 502 : 502;
+		const message = err instanceof Error ? err.message : "Failed to fetch history";
+		return Response.json({
+			code,
+			range,
+			data: [],
+			error: message
+		}, { status });
+	}
+}
 //#endregion
 //#region app/components/layout/navConfig.ts
 var NAV_ITEMS = [
@@ -262,7 +664,19 @@ function BottomNav() {
 	});
 }
 //#endregion
-//#region app/data/utils.ts
+//#region app/data/priceFormat.ts
+function seriesChange(series) {
+	if (!series || series.length < 2) return {
+		abs: 0,
+		pct: 0
+	};
+	const first = series[0].price;
+	const abs = series[series.length - 1].price - first;
+	return {
+		abs,
+		pct: first ? abs / first * 100 : 0
+	};
+}
 function formatPrice(value, currency = "USD") {
 	if (value == null || !Number.isFinite(value)) return "—";
 	try {
@@ -273,28 +687,23 @@ function formatPrice(value, currency = "USD") {
 			maximumFractionDigits: 2
 		}).format(value);
 	} catch {
-		return `${value.toFixed(2)} ${currency}`;
+		return `$${value.toFixed(2)}`;
 	}
 }
-function formatPercent(value) {
+function formatPercent(value, digits = 2) {
 	if (value == null || !Number.isFinite(value)) return "—";
-	return `${value >= 0 ? "" : ""}${Math.abs(value).toFixed(2)}%`;
+	return `${value > 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 function formatRelativeTime(iso) {
 	if (!iso) return "never";
-	try {
-		const date = new Date(iso);
-		const ms = Date.now() - date.getTime();
-		const sec = Math.floor(ms / 1e3);
-		const min = Math.floor(sec / 60);
-		const hr = Math.floor(min / 60);
-		if (sec < 60) return `${sec}s ago`;
-		if (min < 60) return `${min}m ago`;
-		if (hr < 24) return `${hr}h ago`;
-		return `${Math.floor(hr / 24)}d ago`;
-	} catch {
-		return "—";
-	}
+	const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1e3));
+	if (seconds < 5) return "just now";
+	if (seconds < 60) return `${seconds}s ago`;
+	const minutes = Math.round(seconds / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	return `${Math.round(hours / 24)}d ago`;
 }
 //#endregion
 //#region app/components/ui/LiveBadge.tsx
@@ -365,7 +774,7 @@ function TopBar({ lastUpdated }) {
 				className: "brand mobile-only",
 				children: [/* @__PURE__ */ jsx("span", { className: "brand-mark" }), /* @__PURE__ */ jsx("span", {
 					className: "brand-name",
-					children: "Oil Prices"
+					children: "Crude Signal"
 				})]
 			}),
 			/* @__PURE__ */ jsx("div", {
@@ -393,118 +802,64 @@ function TopBar({ lastUpdated }) {
 	});
 }
 //#endregion
-//#region app/data/catalog.ts
-var CATALOG = [
-	{
-		code: "WTI_USD",
-		name: "Crude Oil (WTI)",
-		category: "energy",
-		currency: "USD",
-		unit: "barrel",
-		update_frequency: "every 20s",
-		description: "US benchmark crude, priced for delivery at Cushing, OK."
-	},
-	{
-		code: "BRENT_CRUDE_USD",
-		name: "Crude Oil (Brent)",
-		category: "energy",
-		currency: "USD",
-		unit: "barrel",
-		update_frequency: "every 20s",
-		description: "North Sea benchmark used to price ~2/3 of global crude."
-	},
-	{
-		code: "NATGAS_USD",
-		name: "Natural Gas",
-		category: "energy",
-		currency: "USD",
-		unit: "MMBtu",
-		update_frequency: "every 20s",
-		description: "Henry Hub natural gas futures reference price."
-	},
-	{
-		code: "GOLD_USD",
-		name: "Gold",
-		category: "metals",
-		currency: "USD",
-		unit: "troy oz",
-		update_frequency: "every 20s",
-		description: "Spot gold, the classic macro safe-haven asset."
-	},
-	{
-		code: "SILVER_USD",
-		name: "Silver",
-		category: "metals",
-		currency: "USD",
-		unit: "troy oz",
-		update_frequency: "every 20s",
-		description: "Spot silver, industrial + precious metal demand mix."
-	},
-	{
-		code: "COPPER_USD",
-		name: "Copper",
-		category: "metals",
-		currency: "USD",
-		unit: "lb",
-		update_frequency: "every 20s",
-		description: "Industrial bellwether, tracks global construction demand."
-	},
-	{
-		code: "WHEAT_USD",
-		name: "Wheat",
-		category: "agriculture",
-		currency: "USD",
-		unit: "bushel",
-		update_frequency: "every 20s",
-		description: "Chicago wheat futures, a global food-price benchmark."
-	},
-	{
-		code: "CORN_USD",
-		name: "Corn",
-		category: "agriculture",
-		currency: "USD",
-		unit: "bushel",
-		update_frequency: "every 20s",
-		description: "Chicago corn futures, feed and ethanol demand driver."
-	}
-];
-var CATALOG_BY_CODE = Object.fromEntries(CATALOG.map((c) => [c.code, c]));
-var DEFAULT_WATCHLIST = [
-	"WTI_USD",
-	"BRENT_CRUDE_USD",
-	"NATGAS_USD"
-];
-var CHART_PALETTE = [
-	"#E8672E",
-	"#2FBEB0",
-	"#E0B23C",
-	"#7C9EFF",
-	"#E85D9E",
-	"#4FD1C5",
-	"#C6A15B",
-	"#9AA7B4"
-];
-function buildColorMap(codes) {
-	const map = {};
-	codes.forEach((code) => {
-		const idx = CATALOG.findIndex((c) => c.code === code);
-		map[code] = CHART_PALETTE[(idx >= 0 ? idx : 0) % CHART_PALETTE.length];
+//#region app/context/catalog.tsx
+var CatalogContext = createContext({
+	commodities: [],
+	byCode: {},
+	isLoading: false
+});
+function CatalogProvider({ commodities: initialCommodities = [], children }) {
+	const { data, error, isLoading } = useLiveData("commodities", {}, {
+		live: { enabled: false },
+		initialData: initialCommodities.length ? {
+			commodities: initialCommodities,
+			source: "oilpriceapi"
+		} : void 0
 	});
-	return map;
+	const commodities = data?.commodities ?? initialCommodities;
+	const byCode = useMemo(() => Object.fromEntries(commodities.map((commodity) => [commodity.code, commodity])), [commodities]);
+	const catalogError = data?.error || (error instanceof Error ? error.message : void 0);
+	const value = useMemo(() => ({
+		commodities,
+		byCode,
+		error: catalogError,
+		isLoading
+	}), [
+		commodities,
+		byCode,
+		catalogError,
+		isLoading
+	]);
+	return /* @__PURE__ */ jsx(CatalogContext.Provider, {
+		value,
+		children
+	});
 }
-function humanizeCategory(slug) {
-	return slug.split("_").map((w) => w[0]?.toUpperCase() + w.slice(1)).join(" ");
+function useCatalog() {
+	return useContext(CatalogContext);
 }
 //#endregion
 //#region app/components/layout/TickerTape.tsx
-function TickerTape({ codes, latest, colors }) {
+function TickerTape({ codes, colors, initialPrices }) {
+	const { byCode } = useCatalog();
+	const { data } = useLiveData("latest", { codes }, {
+		live: {
+			enabled: true,
+			intervalMs: 300 * 1e3
+		},
+		initialData: initialPrices ? {
+			updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+			prices: initialPrices
+		} : void 0
+	});
 	if (codes.length === 0) return null;
+	const latest = data?.prices ?? {};
 	return /* @__PURE__ */ jsx("div", {
 		className: "ticker",
 		children: /* @__PURE__ */ jsx("div", {
 			className: "ticker-track",
 			children: [...codes, ...codes].map((code, i) => {
-				const meta = CATALOG_BY_CODE[code];
+				const meta = byCode[code];
 				const point = latest[code];
 				return /* @__PURE__ */ jsxs("span", {
 					className: "ticker-item",
@@ -533,70 +888,96 @@ var STORAGE_KEY = "watchlist:codes";
 var MAX_SIZE = 6;
 var WatchlistContext = createContext(null);
 function WatchlistProvider({ children }) {
-	const [codes, setCodes] = useState(DEFAULT_WATCHLIST);
+	const { commodities, byCode } = useCatalog();
+	const [codes, setCodes] = useState([]);
+	const [hydrated, setHydrated] = useState(false);
 	useEffect(() => {
 		try {
-			const raw = window.localStorage.getItem(STORAGE_KEY);
-			if (raw) {
-				const parsed = JSON.parse(raw);
-				if (Array.isArray(parsed) && parsed.length > 0) setCodes(parsed);
-			}
+			const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
+			if (Array.isArray(parsed)) setCodes(parsed.filter((code) => typeof code === "string"));
 		} catch {}
+		setHydrated(true);
 	}, []);
 	useEffect(() => {
-		try {
-			window.localStorage.setItem(STORAGE_KEY, JSON.stringify(codes));
-		} catch {}
-	}, [codes]);
-	const value = useMemo(() => {
-		const isTracked = (code) => codes.includes(code);
-		return {
-			codes,
-			isTracked,
-			atLimit: codes.length >= MAX_SIZE,
-			maxSize: MAX_SIZE,
-			untrack: (code) => setCodes((prev) => prev.length > 1 ? prev.filter((c) => c !== code) : prev),
-			toggle: (code) => setCodes((prev) => {
-				if (prev.includes(code)) return prev.length > 1 ? prev.filter((c) => c !== code) : prev;
-				if (prev.length >= MAX_SIZE) return prev;
-				return [...prev, code];
-			})
-		};
-	}, [codes]);
+		if (!commodities.length) return;
+		setCodes((current) => {
+			const valid = current.filter((code) => byCode[code]);
+			return valid.length ? valid : commodities.slice(0, 3).map((commodity) => commodity.code);
+		});
+	}, [commodities, byCode]);
+	useEffect(() => {
+		if (hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(codes));
+	}, [codes, hydrated]);
+	const value = useMemo(() => ({
+		codes,
+		isTracked: (code) => codes.includes(code),
+		atLimit: codes.length >= MAX_SIZE,
+		maxSize: MAX_SIZE,
+		untrack: (code) => setCodes((current) => current.filter((item) => item !== code)),
+		toggle: (code) => setCodes((current) => current.includes(code) ? current.filter((item) => item !== code) : current.length >= MAX_SIZE ? current : [...current, code])
+	}), [codes]);
 	return /* @__PURE__ */ jsx(WatchlistContext.Provider, {
 		value,
 		children
 	});
 }
 function useWatchlist() {
-	const ctx = useContext(WatchlistContext);
-	if (!ctx) throw new Error("useWatchlist must be used within WatchlistProvider");
-	return ctx;
+	const context = useContext(WatchlistContext);
+	if (!context) throw new Error("useWatchlist must be used within WatchlistProvider");
+	return context;
+}
+//#endregion
+//#region app/data/catalog.ts
+var CHART_PALETTE = [
+	"#E8672E",
+	"#2FBEB0",
+	"#E0B23C",
+	"#7C9EFF",
+	"#E85D9E",
+	"#4FD1C5"
+];
+function buildColorMap(codes) {
+	return Object.fromEntries(codes.map((code) => {
+		return [code, CHART_PALETTE[[...code].reduce((sum, character) => sum + character.charCodeAt(0), 0) % CHART_PALETTE.length]];
+	}));
+}
+function humanizeCategory(slug) {
+	return slug.split("_").map((word) => word[0]?.toUpperCase() + word.slice(1)).join(" ");
 }
 //#endregion
 //#region app/routes/_layout.tsx
 var _layout_exports = /* @__PURE__ */ __exportAll({
 	default: () => _layout_default,
-	loader: () => loader$3
+	loader: () => loader$2,
+	shouldRevalidate: () => shouldRevalidate
 });
-async function loader$3({}) {
-	const latestByCode = {};
-	for (const c of CATALOG) latestByCode[c.code] = {
-		time: (/* @__PURE__ */ new Date()).toISOString(),
-		price: 0
-	};
+async function loader$2({}) {
+	let commodities = [];
+	let catalogError;
+	try {
+		commodities = await fetchCommodities();
+	} catch (error) {
+		catalogError = error instanceof Error ? error.message : "Unable to load the OilPriceAPI catalog.";
+	}
 	return {
-		latestByCode,
-		updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+		commodities,
+		hasApiKey: isOilPriceApiKeyConfigured(),
+		catalogError
 	};
 }
+function shouldRevalidate() {
+	return false;
+}
 var _layout_default = UNSAFE_withComponentProps(function LayoutRoute({ loaderData }) {
-	return /* @__PURE__ */ jsx(WatchlistProvider, { children: /* @__PURE__ */ jsx(Shell, {
-		latestByCode: loaderData.latestByCode,
-		updatedAt: loaderData.updatedAt
-	}) });
+	return /* @__PURE__ */ jsx(CatalogProvider, {
+		commodities: loaderData.commodities,
+		children: /* @__PURE__ */ jsx(WatchlistProvider, { children: /* @__PURE__ */ jsx(Shell, {
+			hasApiKey: loaderData.hasApiKey,
+			catalogError: loaderData.catalogError
+		}) })
+	});
 });
-function Shell({ latestByCode, updatedAt }) {
+function Shell({ hasApiKey, catalogError }) {
 	const { codes } = useWatchlist();
 	const colors = buildColorMap(codes);
 	return /* @__PURE__ */ jsxs("div", {
@@ -606,10 +987,23 @@ function Shell({ latestByCode, updatedAt }) {
 			/* @__PURE__ */ jsxs("div", {
 				className: "app-main",
 				children: [
-					/* @__PURE__ */ jsx(TopBar, { lastUpdated: updatedAt }),
+					/* @__PURE__ */ jsx(TopBar, { lastUpdated: null }),
+					!hasApiKey && /* @__PURE__ */ jsxs("div", {
+						className: "api-key-banner",
+						children: [
+							"Running on the free no-key demo feed (latest WTI/Brent/Nat Gas only, refreshed hourly). Set ",
+							/* @__PURE__ */ jsx("code", { children: "OILPRICEAPI_KEY" }),
+							" in ",
+							/* @__PURE__ */ jsx("code", { children: ".env" }),
+							" for the live catalog and history."
+						]
+					}),
+					catalogError && /* @__PURE__ */ jsxs("div", {
+						className: "api-key-banner",
+						children: ["Live catalog unavailable: ", catalogError]
+					}),
 					/* @__PURE__ */ jsx(TickerTape, {
 						codes,
-						latest: latestByCode,
 						colors
 					}),
 					/* @__PURE__ */ jsx("main", {
@@ -627,6 +1021,7 @@ function Shell({ latestByCode, updatedAt }) {
 var _layout_settings_exports = /* @__PURE__ */ __exportAll({ default: () => _layout_settings_default });
 var _layout_settings_default = UNSAFE_withComponentProps(function Settings() {
 	const { codes, untrack, maxSize } = useWatchlist();
+	const { byCode } = useCatalog();
 	const [theme, setTheme] = useState("dark");
 	useEffect(() => {
 		const stored = window.localStorage.getItem("theme");
@@ -690,7 +1085,7 @@ var _layout_settings_default = UNSAFE_withComponentProps(function Settings() {
 					},
 					children: codes.map((code) => /* @__PURE__ */ jsxs(Row, { children: [/* @__PURE__ */ jsx("span", {
 						style: { fontSize: "0.85rem" },
-						children: CATALOG_BY_CODE[code]?.name || code
+						children: byCode[code]?.name || code
 					}), /* @__PURE__ */ jsx("button", {
 						className: "btn btn-outline",
 						disabled: codes.length <= 1,
@@ -765,7 +1160,19 @@ function Switch({ checked, onChange }) {
 }
 //#endregion
 //#region app/components/charts/TrendChart.tsx
+function formatPointTime(value) {
+	const date = new Date(value);
+	return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit"
+	}).format(date);
+}
 function TrendChart({ data, color = "#E8672E", currency = "USD", height = 220 }) {
+	const [activeIndex, setActiveIndex] = useState(null);
+	const svgRef = useRef(null);
+	const gradientId = useId();
 	if (!data || data.length < 2) return /* @__PURE__ */ jsx("div", {
 		style: {
 			height,
@@ -776,64 +1183,101 @@ function TrendChart({ data, color = "#E8672E", currency = "USD", height = 220 })
 		},
 		children: "Not enough data"
 	});
-	const width = 800;
-	const padding = 28;
-	const prices = data.map((d) => d.price);
-	const min = Math.min(...prices);
-	const max = Math.max(...prices);
-	const range = max - min || 1;
-	const innerH = height - padding * 2;
-	const linePath = data.map((d, i) => {
-		return [i / (data.length - 1) * width, padding + innerH - (d.price - min) / range * innerH];
-	}).map(([x, y], i) => `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+	const width = 800, padding = 28, prices = data.map((d) => d.price);
+	const min = Math.min(...prices), max = Math.max(...prices), range = max - min || 1, innerH = height - padding * 2;
+	const points = data.map((d, i) => ({
+		x: i / (data.length - 1) * width,
+		y: padding + innerH - (d.price - min) / range * innerH
+	}));
+	const linePath = points.map((point, i) => `${i ? "L" : "M"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
 	const areaPath = `${linePath} L ${width} ${height - padding} L 0 ${height - padding} Z`;
-	const gradientId = `trend-${color.replace("#", "")}`;
-	return /* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsxs("svg", {
-		viewBox: `0 0 ${width} ${height}`,
-		width: "100%",
-		height,
-		preserveAspectRatio: "none",
-		children: [
-			/* @__PURE__ */ jsx("defs", { children: /* @__PURE__ */ jsxs("linearGradient", {
-				id: gradientId,
-				x1: "0",
-				y1: "0",
-				x2: "0",
-				y2: "1",
-				children: [/* @__PURE__ */ jsx("stop", {
-					offset: "0%",
-					stopColor: color,
-					stopOpacity: .3
-				}), /* @__PURE__ */ jsx("stop", {
-					offset: "100%",
-					stopColor: color,
-					stopOpacity: 0
-				})]
-			}) }),
-			[
-				.25,
-				.5,
-				.75
-			].map((f) => /* @__PURE__ */ jsx("line", {
-				x1: 0,
-				x2: width,
-				y1: padding + innerH * f,
-				y2: padding + innerH * f,
-				stroke: "#27272a",
-				strokeWidth: 1
-			}, f)),
-			/* @__PURE__ */ jsx("path", {
-				d: areaPath,
-				fill: `url(#${gradientId})`,
-				stroke: "none"
-			}),
-			/* @__PURE__ */ jsx("path", {
-				d: linePath,
-				fill: "none",
-				stroke: color,
-				strokeWidth: 2
-			})
-		]
+	const active = activeIndex === null ? null : {
+		point: points[activeIndex],
+		data: data[activeIndex]
+	};
+	const selectFromPointer = (clientX) => {
+		const rect = svgRef.current?.getBoundingClientRect();
+		if (!rect) return;
+		setActiveIndex(Math.max(0, Math.min(data.length - 1, Math.round((clientX - rect.left) / rect.width * (data.length - 1)))));
+	};
+	return /* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsxs("div", {
+		style: { position: "relative" },
+		children: [/* @__PURE__ */ jsxs("svg", {
+			ref: svgRef,
+			viewBox: `0 0 ${width} ${height}`,
+			width: "100%",
+			height,
+			preserveAspectRatio: "none",
+			role: "img",
+			"aria-label": "Interactive price trend. Move across the chart to inspect a point.",
+			tabIndex: 0,
+			onPointerMove: (event) => selectFromPointer(event.clientX),
+			onPointerLeave: () => setActiveIndex(null),
+			onKeyDown: (event) => {
+				if (event.key === "ArrowLeft") setActiveIndex((i) => Math.max(0, (i ?? data.length - 1) - 1));
+				if (event.key === "ArrowRight") setActiveIndex((i) => Math.min(data.length - 1, (i ?? -1) + 1));
+			},
+			children: [
+				/* @__PURE__ */ jsx("defs", { children: /* @__PURE__ */ jsxs("linearGradient", {
+					id: gradientId,
+					x1: "0",
+					y1: "0",
+					x2: "0",
+					y2: "1",
+					children: [/* @__PURE__ */ jsx("stop", {
+						offset: "0%",
+						stopColor: color,
+						stopOpacity: .3
+					}), /* @__PURE__ */ jsx("stop", {
+						offset: "100%",
+						stopColor: color,
+						stopOpacity: 0
+					})]
+				}) }),
+				[
+					.25,
+					.5,
+					.75
+				].map((f) => /* @__PURE__ */ jsx("line", {
+					x1: 0,
+					x2: width,
+					y1: padding + innerH * f,
+					y2: padding + innerH * f,
+					stroke: "#27272a",
+					strokeWidth: 1
+				}, f)),
+				/* @__PURE__ */ jsx("path", {
+					d: areaPath,
+					fill: `url(#${gradientId})`,
+					stroke: "none"
+				}),
+				/* @__PURE__ */ jsx("path", {
+					d: linePath,
+					fill: "none",
+					stroke: color,
+					strokeWidth: 2
+				}),
+				active && /* @__PURE__ */ jsxs(Fragment, { children: [/* @__PURE__ */ jsx("line", {
+					x1: active.point.x,
+					x2: active.point.x,
+					y1: padding,
+					y2: height - padding,
+					stroke: "#8b8b90",
+					strokeDasharray: "4 4"
+				}), /* @__PURE__ */ jsx("circle", {
+					cx: active.point.x,
+					cy: active.point.y,
+					r: 5,
+					fill: "var(--surface)",
+					stroke: color,
+					strokeWidth: 2.5
+				})] })
+			]
+		}), active && /* @__PURE__ */ jsxs("div", {
+			className: "chart-tooltip",
+			style: { left: `${Math.min(88, Math.max(2, active.point.x / width * 100))}%` },
+			children: [/* @__PURE__ */ jsx("strong", { children: formatPrice(active.data.price, currency) }), /* @__PURE__ */ jsx("span", { children: formatPointTime(active.data.time) })]
+		})]
 	}), /* @__PURE__ */ jsxs("div", {
 		style: {
 			display: "flex",
@@ -845,28 +1289,11 @@ function TrendChart({ data, color = "#E8672E", currency = "USD", height = 220 })
 		children: [/* @__PURE__ */ jsx("span", { children: formatPrice(min, currency) }), /* @__PURE__ */ jsx("span", { children: formatPrice(max, currency) })]
 	})] });
 }
-process.env.VITE_OILPRICE_API_KEY;
-process.env.VITE_BASE_API;
-/**
-* Calculate the change (absolute and percentage) in a price series
-*/
-function seriesChange(series) {
-	if (!series || series.length < 2) return {
-		abs: 0,
-		pct: 0
-	};
-	const first = series[0].price;
-	const abs = series[series.length - 1].price - first;
-	return {
-		abs,
-		pct: first ? abs / first * 100 : 0
-	};
-}
 //#endregion
 //#region app/routes/_layout.history.tsx
 var _layout_history_exports = /* @__PURE__ */ __exportAll({
 	default: () => _layout_history_default,
-	loader: () => loader$2
+	loader: () => loader$1
 });
 var RANGE_OPTIONS = [
 	{
@@ -882,45 +1309,34 @@ var RANGE_OPTIONS = [
 		label: "30 days"
 	}
 ];
-async function loader$2({ request }) {
+async function loader$1({ request }) {
 	const url = new URL(request.url);
 	return {
-		code: url.searchParams.get("code") || DEFAULT_WATCHLIST[0],
-		range: url.searchParams.get("range") || "past_month",
-		data: [],
-		stats: {
-			high: 0,
-			low: 0,
-			avg: 0,
-			changePct: 0
-		}
+		code: url.searchParams.get("code") || "",
+		range: url.searchParams.get("range") || "past_month"
 	};
 }
 var _layout_history_default = UNSAFE_withComponentProps(function History({ loaderData }) {
 	const { codes } = useWatchlist();
+	const { byCode } = useCatalog();
 	const submit = useSubmit();
 	const navigation = useNavigation();
-	const colorMap = buildColorMap(codes);
 	const { code, range } = loaderData;
-	const [data, setData] = useState(loaderData.data);
-	const [stats, setStats] = useState(loaderData.stats);
-	const [isApiError, setIsApiError] = useState(false);
-	const meta = CATALOG_BY_CODE[code];
-	const accent = colorMap[code] || "#8A97A3";
-	const isLoading = navigation.state !== "idle" || data.length === 0;
-	useEffect(() => {
-		async function fetchData() {
-			try {
-				setIsApiError(false);
-				setIsApiError(true);
-				return;
-			} catch (err) {
-				console.warn("Failed to fetch history data:", err);
-				setIsApiError(true);
-			}
-		}
-		fetchData();
-	}, [code, range]);
+	const selectedCode = code || codes[0] || "";
+	const meta = byCode[selectedCode];
+	const accent = buildColorMap(codes)[selectedCode] || "#8A97A3";
+	const { data, isLoading: isFetching, refresh } = useLiveData("series", {
+		code: selectedCode,
+		range
+	}, { live: { enabled: false } });
+	const chartData = data?.data ?? [];
+	const errorMessage = data?.error;
+	const stats = chartData.length ? {
+		high: Math.max(...chartData.map((point) => point.price)),
+		low: Math.min(...chartData.map((point) => point.price)),
+		avg: chartData.reduce((total, point) => total + point.price, 0) / chartData.length,
+		changePct: seriesChange(chartData).pct
+	} : null;
 	return /* @__PURE__ */ jsxs("div", {
 		style: {
 			display: "flex",
@@ -944,32 +1360,32 @@ var _layout_history_default = UNSAFE_withComponentProps(function History({ loade
 						fontSize: "0.85rem",
 						marginTop: 4
 					},
-					children: "A single server fetch per selection — the URL is the source of truth, so this page works without JavaScript too."
+					children: "The URL is the source of truth; chart data refreshes in the background so changing views stays instant."
 				})] }), /* @__PURE__ */ jsxs(Form, {
 					method: "get",
 					style: {
 						display: "flex",
 						gap: 8
 					},
-					onChange: (e) => submit(e.currentTarget),
+					onChange: (event) => submit(event.currentTarget),
 					children: [/* @__PURE__ */ jsx("select", {
 						name: "code",
-						defaultValue: code,
-						children: (codes.length ? codes : DEFAULT_WATCHLIST).map((c) => /* @__PURE__ */ jsx("option", {
-							value: c,
-							children: CATALOG_BY_CODE[c]?.name || c
-						}, c))
+						defaultValue: selectedCode,
+						children: codes.map((value) => /* @__PURE__ */ jsx("option", {
+							value,
+							children: byCode[value]?.name || value
+						}, value))
 					}), /* @__PURE__ */ jsx("select", {
 						name: "range",
 						defaultValue: range,
-						children: RANGE_OPTIONS.map((r) => /* @__PURE__ */ jsx("option", {
-							value: r.value,
-							children: r.label
-						}, r.value))
+						children: RANGE_OPTIONS.map((option) => /* @__PURE__ */ jsx("option", {
+							value: option.value,
+							children: option.label
+						}, option.value))
 					})]
 				})]
 			}),
-			/* @__PURE__ */ jsxs("div", {
+			stats && /* @__PURE__ */ jsxs("div", {
 				className: "grid grid-stats",
 				style: { gridTemplateColumns: "repeat(2, 1fr)" },
 				children: [
@@ -994,30 +1410,58 @@ var _layout_history_default = UNSAFE_withComponentProps(function History({ loade
 			}),
 			/* @__PURE__ */ jsxs("div", {
 				className: "card",
-				style: { opacity: isLoading ? .6 : 1 },
+				style: { opacity: navigation.state !== "idle" ? .6 : 1 },
 				children: [/* @__PURE__ */ jsxs("div", {
 					style: {
 						display: "flex",
+						justifyContent: "space-between",
 						alignItems: "center",
-						gap: 8,
+						flexWrap: "wrap",
+						gap: 12,
 						marginBottom: 16
 					},
-					children: [/* @__PURE__ */ jsx("span", { style: {
-						width: 8,
-						height: 8,
-						borderRadius: "50%",
-						background: accent
-					} }), /* @__PURE__ */ jsxs("h3", {
-						style: { fontSize: "1rem" },
-						children: [
-							meta?.name || code,
-							" —",
-							" ",
-							RANGE_OPTIONS.find((r) => r.value === range)?.label
-						]
+					children: [/* @__PURE__ */ jsxs("div", {
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: 8
+						},
+						children: [/* @__PURE__ */ jsx("span", { style: {
+							width: 8,
+							height: 8,
+							borderRadius: "50%",
+							background: accent
+						} }), /* @__PURE__ */ jsxs("h3", {
+							style: { fontSize: "1rem" },
+							children: [
+								meta?.name || selectedCode,
+								" — ",
+								RANGE_OPTIONS.find((option) => option.value === range)?.label
+							]
+						})]
+					}), /* @__PURE__ */ jsxs("div", {
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: 10
+						},
+						children: [/* @__PURE__ */ jsx("span", {
+							className: "mono muted",
+							style: { fontSize: "0.72rem" },
+							children: "ON DEMAND"
+						}), /* @__PURE__ */ jsx("button", {
+							className: "btn btn-outline",
+							onClick: () => refresh(),
+							disabled: isFetching,
+							children: isFetching ? "Refreshing..." : "Refresh"
+						})]
 					})]
-				}), /* @__PURE__ */ jsx(TrendChart, {
-					data,
+				}), errorMessage ? /* @__PURE__ */ jsx("p", {
+					className: "muted",
+					style: { fontSize: "0.85rem" },
+					children: errorMessage
+				}) : /* @__PURE__ */ jsx(TrendChart, {
+					data: chartData,
 					color: accent,
 					currency: meta?.currency,
 					height: 320
@@ -1065,7 +1509,7 @@ function CategoryTabs({ categories, active, onChange }) {
 }
 //#endregion
 //#region app/components/commodities/CommodityCard.tsx
-function CommodityCard({ commodity, tracked, disabled, disabledReason, latestPrice, onToggle }) {
+function CommodityCard({ commodity, tracked, disabled, disabledReason, onToggle }) {
 	return /* @__PURE__ */ jsxs("div", {
 		className: "card",
 		style: { borderColor: tracked ? "#8f5432" : void 0 },
@@ -1095,15 +1539,7 @@ function CommodityCard({ commodity, tracked, disabled, disabledReason, latestPri
 					children: humanizeCategory(commodity.category)
 				})]
 			}),
-			latestPrice != null ? /* @__PURE__ */ jsx("div", {
-				style: {
-					fontFamily: "var(--font-mono)",
-					fontWeight: 700,
-					fontSize: "1.1rem",
-					marginBottom: 8
-				},
-				children: formatPrice(latestPrice, commodity.currency)
-			}) : /* @__PURE__ */ jsx("p", {
+			/* @__PURE__ */ jsx("p", {
 				style: {
 					fontSize: "0.78rem",
 					color: "#8b8b90",
@@ -1117,81 +1553,86 @@ function CommodityCard({ commodity, tracked, disabled, disabledReason, latestPri
 					display: "flex",
 					justifyContent: "space-between",
 					alignItems: "center",
-					paddingTop: 4
+					paddingTop: 4,
+					gap: 6
 				},
-				children: [/* @__PURE__ */ jsxs("span", {
-					style: {
-						fontSize: "0.68rem",
-						color: "#8b8b90",
-						fontFamily: "var(--font-mono)"
-					},
-					children: ["per ", commodity.unit]
-				}), /* @__PURE__ */ jsx("button", {
-					className: `btn${tracked ? " btn-outline" : ""}`,
-					onClick: onToggle,
-					disabled,
-					title: disabled ? disabledReason : void 0,
-					children: tracked ? "− Untrack" : "+ Track"
-				})]
+				children: [
+					/* @__PURE__ */ jsxs("span", {
+						style: {
+							fontSize: "0.68rem",
+							color: "#8b8b90",
+							fontFamily: "var(--font-mono)"
+						},
+						children: ["per ", commodity.unit]
+					}),
+					commodity.updateFrequency && /* @__PURE__ */ jsx("span", {
+						className: "badge",
+						children: commodity.updateFrequency
+					}),
+					/* @__PURE__ */ jsx("button", {
+						className: `btn${tracked ? " btn-outline" : ""}`,
+						onClick: onToggle,
+						disabled,
+						title: disabled ? disabledReason : void 0,
+						children: tracked ? "− Untrack" : "+ Track"
+					})
+				]
 			})
 		]
 	});
 }
 //#endregion
 //#region app/routes/_layout.markets.tsx
-var _layout_markets_exports = /* @__PURE__ */ __exportAll({
-	default: () => _layout_markets_default,
-	loader: () => loader$1
-});
-async function loader$1({}) {
-	const latestByCode = {};
-	for (const c of CATALOG) latestByCode[c.code] = 0;
-	return { latestByCode };
-}
-var _layout_markets_default = UNSAFE_withComponentProps(function Markets({ loaderData }) {
+var _layout_markets_exports = /* @__PURE__ */ __exportAll({ default: () => _layout_markets_default });
+var _layout_markets_default = UNSAFE_withComponentProps(function Markets() {
 	const [category, setCategory] = useState(null);
 	const [search, setSearch] = useState("");
-	const [latestByCode, setLatestByCode] = useState(loaderData.latestByCode);
 	const { codes, isTracked, toggle, atLimit, maxSize } = useWatchlist();
-	useEffect(() => {
-		async function fetchPrices() {
-			try {
-				return;
-			} catch (err) {
-				console.warn("Failed to fetch latest prices:", err);
-			}
-		}
-		fetchPrices();
-		const interval = setInterval(fetchPrices, 3e4);
-		return () => clearInterval(interval);
-	}, []);
-	const categories = useMemo(() => Array.from(new Set(CATALOG.map((c) => c.category))).sort(), []);
+	const { commodities, error, isLoading } = useCatalog();
+	const categories = useMemo(() => Array.from(new Set(commodities.map((c) => c.category))).sort(), [commodities]);
 	const filtered = useMemo(() => {
-		let list = CATALOG;
+		let list = commodities;
 		if (category) list = list.filter((c) => c.category === category);
 		if (search.trim()) {
 			const q = search.trim().toLowerCase();
 			list = list.filter((c) => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q));
 		}
 		return list;
-	}, [category, search]);
+	}, [
+		category,
+		search,
+		commodities
+	]);
 	return /* @__PURE__ */ jsxs("div", {
 		style: {
 			display: "flex",
 			flexDirection: "column",
 			gap: "1.75rem"
 		},
-		children: [/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h1", {
-			style: { fontSize: "1.5rem" },
-			children: "Markets"
-		}), /* @__PURE__ */ jsx("p", {
-			className: "muted",
-			style: {
-				fontSize: "0.85rem",
-				marginTop: 4
-			},
-			children: "Browse the catalog and track what you want to follow it will show up on the Dashboard."
-		})] }), /* @__PURE__ */ jsxs("div", { children: [
+		children: [/* @__PURE__ */ jsxs("div", { children: [
+			/* @__PURE__ */ jsx("h1", {
+				style: { fontSize: "1.5rem" },
+				children: "Markets"
+			}),
+			/* @__PURE__ */ jsx("p", {
+				className: "muted",
+				style: {
+					fontSize: "0.85rem",
+					marginTop: 4
+				},
+				children: "A live, searchable catalog from OilPriceAPI. Track any instrument to add it to your dashboard."
+			}),
+			isLoading && /* @__PURE__ */ jsx("p", {
+				className: "muted",
+				style: { fontSize: "0.8rem" },
+				children: "Loading live catalog..."
+			}),
+			error && /* @__PURE__ */ jsxs("p", {
+				className: "muted",
+				style: { fontSize: "0.8rem" },
+				children: ["Live catalog unavailable: ", error]
+			})
+		] }), /* @__PURE__ */ jsxs("div", { children: [
 			/* @__PURE__ */ jsxs("div", {
 				style: {
 					display: "flex",
@@ -1208,14 +1649,14 @@ var _layout_markets_default = UNSAFE_withComponentProps(function Markets({ loade
 						margin: 0
 					},
 					children: [
-						CATALOG.length,
+						commodities.length,
 						" commodities available · tracking ",
 						codes.length,
 						"/",
 						maxSize
 					]
 				}), /* @__PURE__ */ jsx("input", {
-					placeholder: "Search commodities…",
+					placeholder: "Search commodities...",
 					value: search,
 					onChange: (e) => setSearch(e.target.value),
 					style: { width: 220 }
@@ -1243,7 +1684,6 @@ var _layout_markets_default = UNSAFE_withComponentProps(function Markets({ loade
 						tracked,
 						disabled: tracked ? codes.length <= 1 : atLimit,
 						disabledReason: tracked ? "Keep at least one commodity tracked" : `You're tracking ${maxSize}/${maxSize} — untrack one to add another`,
-						latestPrice: loaderData.latestByCode[commodity.code],
 						onToggle: () => toggle(commodity.code)
 					}, commodity.code);
 				})
@@ -1302,7 +1742,7 @@ function Sparkline({ data, color = "#8A97A3", height = 44 }) {
 }
 //#endregion
 //#region app/components/ui/StatCard.tsx
-function StatCard({ label, price, currency, unit, changePct, sparkline, accent, isActive, onClick, onRemove }) {
+function StatCard({ label, price, currency, unit, changePct, sparkline, accent, isActive, onClick, onRemove, note }) {
 	const up = (changePct ?? 0) >= 0;
 	return /* @__PURE__ */ jsxs("div", {
 		onClick,
@@ -1411,6 +1851,15 @@ function StatCard({ label, price, currency, unit, changePct, sparkline, accent, 
 			/* @__PURE__ */ jsx(Sparkline, {
 				data: sparkline,
 				color: accent
+			}),
+			note && /* @__PURE__ */ jsx("p", {
+				style: {
+					fontSize: "0.68rem",
+					color: "#c96b6b",
+					marginTop: 6,
+					marginBottom: 0
+				},
+				children: note
 			})
 		]
 	});
@@ -1422,44 +1871,23 @@ var _layout__index_exports = /* @__PURE__ */ __exportAll({
 	loader: () => loader
 });
 async function loader({}) {
-	return {
-		series: {},
-		generatedAt: (/* @__PURE__ */ new Date()).toISOString()
-	};
+	return { series: {} };
 }
 var _layout__index_default = UNSAFE_withComponentProps(function Dashboard({ loaderData }) {
 	const { codes, untrack } = useWatchlist();
+	const { byCode } = useCatalog();
 	const colorMap = buildColorMap(codes);
 	const [focused, setFocused] = useState(codes[0]);
-	const [seriesByCode, setSeriesByCode] = useState(loaderData.series);
-	const [lastUpdated, setLastUpdated] = useState(loaderData.generatedAt);
 	useEffect(() => {
 		if (!codes.includes(focused)) setFocused(codes[0]);
 	}, [codes, focused]);
-	useEffect(() => {
-		async function fetchLiveData() {
-			try {
-				console.warn("API key not configured - showing placeholder data");
-				return;
-			} catch (err) {
-				console.warn("Failed to fetch live data:", err);
-			}
-		}
-		fetchLiveData();
-	}, [codes]);
-	useEffect(() => {
-		const id = setInterval(async () => {
-			try {
-				return;
-			} catch (err) {
-				console.warn("Failed to update prices:", err);
-			}
-		}, 2e4);
-		return () => clearInterval(id);
-	}, [codes]);
-	const focusedMeta = CATALOG_BY_CODE[focused];
-	const focusedAccent = colorMap[focused] || "#8A97A3";
-	const focusedSeries = seriesByCode[focused];
+	if (!codes.length) return /* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h1", {
+		style: { fontSize: "1.5rem" },
+		children: "Dashboard"
+	}), /* @__PURE__ */ jsx("p", {
+		className: "muted",
+		children: "Waiting for the live OilPriceAPI catalog."
+	})] });
 	return /* @__PURE__ */ jsxs("div", {
 		style: {
 			display: "flex",
@@ -1467,95 +1895,134 @@ var _layout__index_default = UNSAFE_withComponentProps(function Dashboard({ load
 			gap: "1.5rem"
 		},
 		children: [
-			codes.length === 0 && /* @__PURE__ */ jsxs("div", {
+			/* @__PURE__ */ jsxs("div", { children: [/* @__PURE__ */ jsx("h1", {
+				style: { fontSize: "1.5rem" },
+				children: "Dashboard"
+			}), /* @__PURE__ */ jsx("p", {
+				className: "muted",
 				style: {
-					background: "var(--surface)",
-					border: "1px solid var(--border)",
-					borderRadius: "6px",
-					padding: "1rem",
-					color: "var(--text-muted)",
-					fontSize: "0.85rem"
+					fontSize: "0.85rem",
+					marginTop: 4
 				},
-				children: [
-					"No oil prices trached yet.",
-					/* @__PURE__ */ jsx("a", {
-						href: "/markets",
-						style: {
-							color: "inherit",
-							textDecoration: "underline"
-						},
-						children: "Markets"
-					}),
-					" ",
-					"to start tracking."
-				]
-			}),
+				children: "Each card polls OilPriceAPI every 2 minutes. The focused chart below polls faster (60s) — they share one cached fetch per commodity, so tracking both isn't double the requests. Intervals are deliberately conservative to fit a free-tier quota (200 requests/month)."
+			})] }),
 			/* @__PURE__ */ jsx("div", {
 				className: "grid grid-3",
-				children: codes.map((code) => {
-					const series = seriesByCode[code];
-					const change = seriesChange(series);
-					const last = series?.[series.length - 1];
-					const meta = CATALOG_BY_CODE[code];
-					return /* @__PURE__ */ jsx(StatCard, {
-						label: meta?.name || code,
-						accent: colorMap[code] || "#8A97A3",
-						price: last?.price,
-						currency: meta?.currency,
-						unit: meta?.unit,
-						changePct: series ? change.pct : null,
-						sparkline: series,
-						isActive: focused === code,
-						onClick: () => setFocused(code),
-						onRemove: codes.length > 1 ? () => untrack(code) : void 0
-					}, code);
-				})
+				children: codes.map((code) => /* @__PURE__ */ jsx(LiveStatCard, {
+					code,
+					accent: colorMap[code] || "#8A97A3",
+					isFocused: focused === code,
+					onFocus: () => setFocused(code),
+					onRemove: codes.length > 1 ? () => untrack(code) : void 0,
+					initialSeries: loaderData.series[code],
+					meta: byCode[code]
+				}, code))
 			}),
-			/* @__PURE__ */ jsxs("div", {
-				className: "card",
-				children: [/* @__PURE__ */ jsxs("div", {
-					style: {
-						display: "flex",
-						justifyContent: "space-between",
-						alignItems: "center",
-						flexWrap: "wrap",
-						gap: 12,
-						marginBottom: 12
-					},
-					children: [/* @__PURE__ */ jsxs("div", {
-						style: {
-							display: "flex",
-							alignItems: "center",
-							gap: 8
-						},
-						children: [/* @__PURE__ */ jsx("span", { style: {
-							width: 8,
-							height: 8,
-							borderRadius: "50%",
-							background: focusedAccent
-						} }), /* @__PURE__ */ jsxs("h3", {
-							style: { fontSize: "1rem" },
-							children: [focusedMeta?.name || focused, " trend"]
-						})]
-					}), /* @__PURE__ */ jsx(LiveBadge, {
-						live: true,
-						lastUpdated
-					})]
-				}), /* @__PURE__ */ jsx(TrendChart, {
-					data: focusedSeries,
-					color: focusedAccent,
-					currency: focusedMeta?.currency
-				})]
+			/* @__PURE__ */ jsx(FocusedChart, {
+				code: focused,
+				accent: colorMap[focused] || "#8A97A3",
+				initialSeries: loaderData.series[focused],
+				meta: byCode[focused]
 			})
 		]
 	});
 });
+function LiveStatCard({ code, accent, isFocused, onFocus, onRemove, initialSeries, meta }) {
+	const { data, error } = useLiveData("series", {
+		code,
+		range: "past_day"
+	}, {
+		live: {
+			enabled: true,
+			intervalMs: 120 * 1e3
+		},
+		initialData: initialSeries ? {
+			code,
+			range: "past_day",
+			data: initialSeries
+		} : void 0
+	});
+	const series = data?.data;
+	const change = seriesChange(series);
+	const last = series?.[series.length - 1];
+	const errorMessage = data?.error || (error instanceof Error ? error.message : void 0);
+	return /* @__PURE__ */ jsx(StatCard, {
+		label: meta?.name || code,
+		accent,
+		price: last?.price,
+		currency: meta?.currency,
+		unit: meta?.unit,
+		changePct: series?.length ? change.pct : null,
+		sparkline: series,
+		isActive: isFocused,
+		onClick: onFocus,
+		onRemove,
+		note: errorMessage
+	});
+}
+function FocusedChart({ code, accent, initialSeries, meta }) {
+	const { data, error, lastUpdated } = useLiveData("series", {
+		code,
+		range: "past_day"
+	}, {
+		live: {
+			enabled: true,
+			intervalMs: 60 * 1e3
+		},
+		initialData: initialSeries ? {
+			code,
+			range: "past_day",
+			data: initialSeries
+		} : void 0
+	});
+	const errorMessage = data?.error || (error instanceof Error ? error.message : void 0);
+	return /* @__PURE__ */ jsxs("div", {
+		className: "card",
+		children: [/* @__PURE__ */ jsxs("div", {
+			style: {
+				display: "flex",
+				justifyContent: "space-between",
+				alignItems: "center",
+				flexWrap: "wrap",
+				gap: 12,
+				marginBottom: 12
+			},
+			children: [/* @__PURE__ */ jsxs("div", {
+				style: {
+					display: "flex",
+					alignItems: "center",
+					gap: 8
+				},
+				children: [/* @__PURE__ */ jsx("span", { style: {
+					width: 8,
+					height: 8,
+					borderRadius: "50%",
+					background: accent
+				} }), /* @__PURE__ */ jsxs("h3", {
+					style: { fontSize: "1rem" },
+					children: [meta?.name || code, " trend"]
+				})]
+			}), /* @__PURE__ */ jsx(LiveBadge, {
+				live: true,
+				lastUpdated: lastUpdated ? new Date(lastUpdated).toISOString() : null
+			})]
+		}), errorMessage ? /* @__PURE__ */ jsx("p", {
+			className: "muted",
+			style: { fontSize: "0.8rem" },
+			children: errorMessage
+		}) : /* @__PURE__ */ jsx(TrendChart, {
+			data: data?.data,
+			color: accent,
+			currency: meta?.currency
+		})]
+	});
+}
 //#endregion
 //#region \0virtual:react-router/server-manifest
 var server_manifest_default = {
 	"entry": {
-		"module": "/assets/entry.client-DerSPEEn.js",
-		"imports": ["/assets/jsx-runtime-Cvv8R5mo.js", "/assets/errorBoundaries-BXWPBLUz.js"],
+		"module": "/assets/entry.client-CDGwW0Z7.js",
+		"imports": ["/assets/jsx-runtime-DTtwqBT8.js", "/assets/errorBoundaries-DOl9lQkM.js"],
 		"css": []
 	},
 	"routes": {
@@ -1572,12 +2039,76 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": true,
-			"module": "/assets/root-40zBI95a.js",
+			"module": "/assets/root-Hekx4p2n.js",
 			"imports": [
-				"/assets/jsx-runtime-Cvv8R5mo.js",
-				"/assets/errorBoundaries-BXWPBLUz.js",
-				"/assets/lib-CAyYMtqv.js"
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/errorBoundaries-DOl9lQkM.js",
+				"/assets/lib-ChYhUxQr.js",
+				"/assets/dataProvider-D4DgfuRd.js"
 			],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"routes/resources.commodities": {
+			"id": "routes/resources.commodities",
+			"parentId": "root",
+			"path": "resources/commodities",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": false,
+			"hasErrorBoundary": false,
+			"module": "/assets/resources.commodities-BvRk9kiK.js",
+			"imports": [],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"routes/resources.latest": {
+			"id": "routes/resources.latest",
+			"parentId": "root",
+			"path": "resources/latest",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": false,
+			"hasErrorBoundary": false,
+			"module": "/assets/resources.latest-BvRk9kiK.js",
+			"imports": [],
+			"css": [],
+			"clientActionModule": void 0,
+			"clientLoaderModule": void 0,
+			"clientMiddlewareModule": void 0,
+			"hydrateFallbackModule": void 0
+		},
+		"routes/resources.series": {
+			"id": "routes/resources.series",
+			"parentId": "root",
+			"path": "resources/series",
+			"index": void 0,
+			"caseSensitive": void 0,
+			"hasAction": false,
+			"hasLoader": true,
+			"hasClientAction": false,
+			"hasClientLoader": false,
+			"hasClientMiddleware": false,
+			"hasDefaultExport": false,
+			"hasErrorBoundary": false,
+			"module": "/assets/resources.series-BvRk9kiK.js",
+			"imports": [],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -1597,14 +2128,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/_layout-Brm3ob5O.js",
+			"module": "/assets/_layout-0nBnLpU_.js",
 			"imports": [
-				"/assets/jsx-runtime-Cvv8R5mo.js",
-				"/assets/lib-CAyYMtqv.js",
-				"/assets/utils-BeYTUkT5.js",
-				"/assets/LiveBadge-BsnKA6FW.js",
-				"/assets/watchlist-Qq03c4hu.js",
-				"/assets/errorBoundaries-BXWPBLUz.js"
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/lib-ChYhUxQr.js",
+				"/assets/dataProvider-D4DgfuRd.js",
+				"/assets/priceFormat-Ct-rlSGV.js",
+				"/assets/LiveBadge-zhftmByq.js",
+				"/assets/watchlist-CGoPXEaI.js",
+				"/assets/catalog-CvRidDoR.js",
+				"/assets/errorBoundaries-DOl9lQkM.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -1625,8 +2158,12 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/_layout.settings-D-BJnCsU.js",
-			"imports": ["/assets/jsx-runtime-Cvv8R5mo.js", "/assets/watchlist-Qq03c4hu.js"],
+			"module": "/assets/_layout.settings-D2uE8W5Q.js",
+			"imports": [
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/watchlist-CGoPXEaI.js",
+				"/assets/dataProvider-D4DgfuRd.js"
+			],
 			"css": [],
 			"clientActionModule": void 0,
 			"clientLoaderModule": void 0,
@@ -1646,14 +2183,16 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/_layout.history-B59uulIU.js",
+			"module": "/assets/_layout.history--BbZ8z7h.js",
 			"imports": [
-				"/assets/jsx-runtime-Cvv8R5mo.js",
-				"/assets/lib-CAyYMtqv.js",
-				"/assets/utils-BeYTUkT5.js",
-				"/assets/watchlist-Qq03c4hu.js",
-				"/assets/api-Cgyh9mhe.js",
-				"/assets/errorBoundaries-BXWPBLUz.js"
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/lib-ChYhUxQr.js",
+				"/assets/dataProvider-D4DgfuRd.js",
+				"/assets/priceFormat-Ct-rlSGV.js",
+				"/assets/watchlist-CGoPXEaI.js",
+				"/assets/catalog-CvRidDoR.js",
+				"/assets/TrendChart-B1b7Mtol.js",
+				"/assets/errorBoundaries-DOl9lQkM.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -1668,17 +2207,18 @@ var server_manifest_default = {
 			"index": void 0,
 			"caseSensitive": void 0,
 			"hasAction": false,
-			"hasLoader": true,
+			"hasLoader": false,
 			"hasClientAction": false,
 			"hasClientLoader": false,
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/_layout.markets-CCCvq6Ju.js",
+			"module": "/assets/_layout.markets-C1HWNryi.js",
 			"imports": [
-				"/assets/jsx-runtime-Cvv8R5mo.js",
-				"/assets/utils-BeYTUkT5.js",
-				"/assets/watchlist-Qq03c4hu.js"
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/watchlist-CGoPXEaI.js",
+				"/assets/catalog-CvRidDoR.js",
+				"/assets/dataProvider-D4DgfuRd.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -1699,13 +2239,15 @@ var server_manifest_default = {
 			"hasClientMiddleware": false,
 			"hasDefaultExport": true,
 			"hasErrorBoundary": false,
-			"module": "/assets/_layout._index-DCwTzaJ_.js",
+			"module": "/assets/_layout._index-Ca_izj2o.js",
 			"imports": [
-				"/assets/jsx-runtime-Cvv8R5mo.js",
-				"/assets/utils-BeYTUkT5.js",
-				"/assets/LiveBadge-BsnKA6FW.js",
-				"/assets/watchlist-Qq03c4hu.js",
-				"/assets/api-Cgyh9mhe.js"
+				"/assets/jsx-runtime-DTtwqBT8.js",
+				"/assets/dataProvider-D4DgfuRd.js",
+				"/assets/priceFormat-Ct-rlSGV.js",
+				"/assets/LiveBadge-zhftmByq.js",
+				"/assets/watchlist-CGoPXEaI.js",
+				"/assets/catalog-CvRidDoR.js",
+				"/assets/TrendChart-B1b7Mtol.js"
 			],
 			"css": [],
 			"clientActionModule": void 0,
@@ -1714,8 +2256,8 @@ var server_manifest_default = {
 			"hydrateFallbackModule": void 0
 		}
 	},
-	"url": "/assets/manifest-577b3240.js",
-	"version": "577b3240",
+	"url": "/assets/manifest-5de906e9.js",
+	"version": "5de906e9",
 	"sri": void 0
 };
 //#endregion
@@ -1743,6 +2285,30 @@ var routes = {
 		index: void 0,
 		caseSensitive: void 0,
 		module: root_exports
+	},
+	"routes/resources.commodities": {
+		id: "routes/resources.commodities",
+		parentId: "root",
+		path: "resources/commodities",
+		index: void 0,
+		caseSensitive: void 0,
+		module: resources_commodities_exports
+	},
+	"routes/resources.latest": {
+		id: "routes/resources.latest",
+		parentId: "root",
+		path: "resources/latest",
+		index: void 0,
+		caseSensitive: void 0,
+		module: resources_latest_exports
+	},
+	"routes/resources.series": {
+		id: "routes/resources.series",
+		parentId: "root",
+		path: "resources/series",
+		index: void 0,
+		caseSensitive: void 0,
+		module: resources_series_exports
 	},
 	"routes/_layout": {
 		id: "routes/_layout",

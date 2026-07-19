@@ -1,15 +1,17 @@
 import { Form, useNavigation, useSubmit } from 'react-router';
 import type { Route } from './+types/_layout.history';
-import { useEffect, useState } from 'react';
 import { TrendChart } from '../components/charts/TrendChart';
 import { useWatchlist } from '../context/watchlist';
+import { useCatalog } from '../context/catalog';
+import { useLiveData } from '../context/dataProvider';
+import { buildColorMap } from '../data/catalog';
 import {
-  CATALOG_BY_CODE,
-  DEFAULT_WATCHLIST,
-  buildColorMap,
-} from '../data/catalog';
-import { seriesChange, type HistoryPoint } from '../data/api';
-import { formatPrice, formatPercent } from '../data/utils';
+  seriesChange,
+  formatPrice,
+  formatPercent,
+  type HistoryPoint,
+  type PriceRange,
+} from '../data/priceFormat';
 
 const RANGE_OPTIONS: { value: PriceRange; label: string }[] = [
   { value: 'past_day', label: '24 hours' },
@@ -17,83 +19,45 @@ const RANGE_OPTIONS: { value: PriceRange; label: string }[] = [
   { value: 'past_month', label: '30 days' },
 ];
 
-export type PriceRange = 'past_day' | 'past_week' | 'past_month';
-
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  const code = url.searchParams.get('code') || DEFAULT_WATCHLIST[0];
-  const range = (url.searchParams.get('range') as PriceRange) || 'past_month';
-
   return {
-    code,
-    range,
-    data: [],
-    stats: {
-      high: 0,
-      low: 0,
-      avg: 0,
-      changePct: 0,
-    },
+    code: url.searchParams.get('code') || '',
+    range: (url.searchParams.get('range') as PriceRange) || 'past_month',
   };
 }
 
 export default function History({ loaderData }: Route.ComponentProps) {
   const { codes } = useWatchlist();
+  const { byCode } = useCatalog();
   const submit = useSubmit();
   const navigation = useNavigation();
-  const colorMap = buildColorMap(codes);
   const { code, range } = loaderData;
-  const [data, setData] = useState<HistoryPoint[]>(loaderData.data);
-  const [stats, setStats] = useState(loaderData.stats);
-  const [isApiError, setIsApiError] = useState(false);
-
-  const meta = CATALOG_BY_CODE[code];
-  const accent = colorMap[code] || '#8A97A3';
-  const isLoading = navigation.state !== 'idle' || data.length === 0;
-
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        setIsApiError(false);
-        const apiKey = import.meta.env.VITE_COMMODITY_API_KEY;
-
-        if (!apiKey) {
-          setIsApiError(true);
-          return;
-        }
-
-        const response = await fetch(
-          `/api/commodities/${code}/history?range=${range}&key=${encodeURIComponent(apiKey)}`,
-        );
-
-        if (!response.ok) {
-          console.warn(`Failed to fetch data: ${response.statusText}`);
-          setIsApiError(true);
-          return;
-        }
-
-        const apiData = await response.json();
-        const series = apiData.series || [];
-        setData(series);
-
-        if (series.length > 0) {
-          const prices = series.map((d) => d.price);
-          const change = seriesChange(series);
-          setStats({
-            high: Math.max(...prices),
-            low: Math.min(...prices),
-            avg: prices.reduce((a, b) => a + b, 0) / prices.length,
-            changePct: change.pct,
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to fetch history data:', err);
-        setIsApiError(true);
+  const selectedCode = code || codes[0] || '';
+  const meta = byCode[selectedCode];
+  const accent = buildColorMap(codes)[selectedCode] || '#8A97A3';
+  const {
+    data,
+    isLoading: isFetching,
+    refresh,
+  } = useLiveData<{
+    code: string;
+    range: string;
+    data: HistoryPoint[];
+    error?: string;
+  }>('series', { code: selectedCode, range }, { live: { enabled: false } });
+  const chartData = data?.data ?? [];
+  const errorMessage = data?.error;
+  const stats = chartData.length
+    ? {
+        high: Math.max(...chartData.map((point) => point.price)),
+        low: Math.min(...chartData.map((point) => point.price)),
+        avg:
+          chartData.reduce((total, point) => total + point.price, 0) /
+          chartData.length,
+        changePct: seriesChange(chartData).pct,
       }
-    }
-
-    fetchData();
-  }, [code, range]);
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -108,81 +72,108 @@ export default function History({ loaderData }: Route.ComponentProps) {
         <div>
           <h1 style={{ fontSize: '1.5rem' }}>History</h1>
           <p className='muted' style={{ fontSize: '0.85rem', marginTop: 4 }}>
-            A single server fetch per selection — the URL is the source of
-            truth, so this page works without JavaScript too.
+            A single fetch per range change no live polling needed for a
+            backward looking view.
           </p>
         </div>
-
         <Form
           method='get'
           style={{ display: 'flex', gap: 8 }}
-          onChange={(e) => submit(e.currentTarget)}
+          onChange={(event) => submit(event.currentTarget)}
         >
-          <select name='code' defaultValue={code}>
-            {(codes.length ? codes : DEFAULT_WATCHLIST).map((c) => (
-              <option key={c} value={c}>
-                {CATALOG_BY_CODE[c]?.name || c}
+          <select name='code' defaultValue={selectedCode}>
+            {codes.map((value) => (
+              <option key={value} value={value}>
+                {byCode[value]?.name || value}
               </option>
             ))}
           </select>
           <select name='range' defaultValue={range}>
-            {RANGE_OPTIONS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
+            {RANGE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </select>
         </Form>
       </div>
-
+      {stats && (
+        <div
+          className='grid grid-stats'
+          style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}
+        >
+          <StatBlock
+            label='High'
+            value={formatPrice(stats.high, meta?.currency)}
+          />
+          <StatBlock
+            label='Low'
+            value={formatPrice(stats.low, meta?.currency)}
+          />
+          <StatBlock
+            label='Average'
+            value={formatPrice(stats.avg, meta?.currency)}
+          />
+          <StatBlock
+            label='Change'
+            value={formatPercent(stats.changePct)}
+            tone={stats.changePct >= 0 ? 'up' : 'down'}
+          />
+        </div>
+      )}
       <div
-        className='grid grid-stats'
-        style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}
+        className='card'
+        style={{ opacity: navigation.state !== 'idle' ? 0.6 : 1 }}
       >
-        <StatBlock
-          label='High'
-          value={formatPrice(stats.high, meta?.currency)}
-        />
-        <StatBlock label='Low' value={formatPrice(stats.low, meta?.currency)} />
-        <StatBlock
-          label='Average'
-          value={formatPrice(stats.avg, meta?.currency)}
-        />
-        <StatBlock
-          label='Change'
-          value={formatPercent(stats.changePct)}
-          tone={stats.changePct >= 0 ? 'up' : 'down'}
-        />
-      </div>
-
-      <div className='card' style={{ opacity: isLoading ? 0.6 : 1 }}>
         <div
           style={{
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: 8,
+            flexWrap: 'wrap',
+            gap: 12,
             marginBottom: 16,
           }}
         >
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: accent,
-            }}
-          />
-          <h3 style={{ fontSize: '1rem' }}>
-            {meta?.name || code} —{' '}
-            {RANGE_OPTIONS.find((r) => r.value === range)?.label}
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: accent,
+              }}
+            />
+            <h3 style={{ fontSize: '1rem' }}>
+              {meta?.name || selectedCode} —{' '}
+              {RANGE_OPTIONS.find((option) => option.value === range)?.label}
+            </h3>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className='mono muted' style={{ fontSize: '0.72rem' }}>
+              ON DEMAND
+            </span>
+            <button
+              className='btn btn-outline'
+              onClick={() => refresh()}
+              disabled={isFetching}
+            >
+              {isFetching ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
         </div>
-        <TrendChart
-          data={data}
-          color={accent}
-          currency={meta?.currency}
-          height={320}
-        />
+        {errorMessage ? (
+          <p className='muted' style={{ fontSize: '0.85rem' }}>
+            {errorMessage}
+          </p>
+        ) : (
+          <TrendChart
+            data={chartData}
+            color={accent}
+            currency={meta?.currency}
+            height={320}
+          />
+        )}
       </div>
     </div>
   );

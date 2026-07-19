@@ -1,4 +1,4 @@
-import type { HistoryPoint } from '../../data/api';
+import type { HistoryPoint } from '../../data/priceFormat';
 
 interface SparklineProps {
   data?: HistoryPoint[] | null;
