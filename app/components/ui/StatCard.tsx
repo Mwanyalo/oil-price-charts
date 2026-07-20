@@ -5,6 +5,7 @@ import {
   formatPercent,
   type HistoryPoint,
 } from '../../data/priceFormat';
+import { X } from 'lucide-react';
 
 interface StatCardProps {
   label: string;
@@ -49,7 +50,7 @@ export function StatCard({
               e.stopPropagation();
               onRemove();
             }}
-            icon={<>X</>}
+            icon={<X size={16}  />}
             variant='ghost'
             size='sm'
             position='absolute'

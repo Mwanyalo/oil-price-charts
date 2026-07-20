@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import type { HistoryPoint } from '../../data/priceFormat';
 import { formatPrice } from '../../data/priceFormat';
-import { Box, Text, useColorModeValue } from '@chakra-ui/react';
+import { Box, Spinner, Text, useColorModeValue } from '@chakra-ui/react';
 import { LineLoader } from '../ui/LineLoader';
 import { formatClockTime } from '~/data/timeFormart';
 
@@ -94,11 +94,21 @@ export function TrendChart({
         display='flex'
         alignItems='center'
         justifyContent='center'
+        gap={2} // adds spacing between children
       >
-        <LineLoader active={loading} />
-        <Text color='textMuted' fontSize='sm'>
-          {loading ? 'Loading…' : 'No data yet.'}
-        </Text>
+        <LineLoader active={true} />
+        {loading ? (
+          <Box display='flex' alignItems='center' gap={2}>
+            <Spinner size='sm' color='blue.500' />
+            <Text color='textMuted' fontSize='sm'>
+              Loading…
+            </Text>
+          </Box>
+        ) : (
+          <Text color='textMuted' fontSize='sm'>
+            No data yet.
+          </Text>
+        )}
       </Box>
     );
 
