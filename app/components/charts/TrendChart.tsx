@@ -6,11 +6,13 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  XAxis,
 } from 'recharts';
 import type { HistoryPoint } from '../../data/priceFormat';
 import { formatPrice } from '../../data/priceFormat';
-import { Box, Text } from '@chakra-ui/react';
+import { Box, Text, useColorModeValue } from '@chakra-ui/react';
 import { LineLoader } from '../ui/LineLoader';
+import { formatClockTime } from '~/data/timeFormart';
 
 interface TrendChartProps {
   data?: HistoryPoint[] | null;
@@ -81,6 +83,8 @@ export function TrendChart({
 }: TrendChartProps) {
   const rawId = useId();
   const gradientId = `trend-${rawId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  const gridColor = useColorModeValue('#E2DFD6', '#1A222B');
+  const axisColor = useColorModeValue('#8A97A3', '#5A6A78');
 
   if (!data || data.length < 2)
     return (
@@ -118,12 +122,34 @@ export function TrendChart({
             </linearGradient>
           </defs>
           <CartesianGrid
-            horizontal
+            stroke={gridColor}
             vertical={false}
-            stroke='#27272a'
-            strokeWidth={1}
+            strokeDasharray='3 3'
           />
-          <YAxis hide domain={[min - pad, max + pad]} />
+          <XAxis
+            dataKey='time'
+            tickFormatter={(t) => formatClockTime(t)}
+            tick={{
+              fontSize: 11,
+              fill: axisColor,
+              fontFamily: 'IBM Plex Mono, monospace',
+            }}
+            tickLine={false}
+            axisLine={{ stroke: gridColor }}
+            minTickGap={40}
+          />
+          <YAxis
+            domain={['auto', 'auto']}
+            tick={{
+              fontSize: 11,
+              fill: axisColor,
+              fontFamily: 'IBM Plex Mono, monospace',
+            }}
+            tickLine={false}
+            axisLine={false}
+            width={54}
+            tickFormatter={(v: number) => `$${v.toFixed(0)}`}
+          />
           <Tooltip
             content={(props: any) => (
               <ChartTooltip {...props} currency={currency} />

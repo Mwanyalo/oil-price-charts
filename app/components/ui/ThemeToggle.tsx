@@ -1,26 +1,21 @@
-import { useEffect, useState } from 'react';
-import { Button } from '@chakra-ui/react';
+import { IconButton, Tooltip, useColorMode } from '@chakra-ui/react';
+import { Moon, Sun } from 'lucide-react';
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem('theme');
-    const initial = stored === 'light' ? 'light' : 'dark';
-    setTheme(initial);
-    document.documentElement.setAttribute('data-theme', initial);
-  }, []);
-
-  const toggle = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    document.documentElement.setAttribute('data-theme', next);
-    window.localStorage.setItem('theme', next);
-  };
-
+  const { colorMode, toggleColorMode } = useColorMode();
   return (
-    <Button size='sm' onClick={toggle}>
-      {theme === 'dark' ? 'Light' : 'Dark '} theme
-    </Button>
+    <Tooltip
+      label={colorMode === 'dark' ? 'Light mode' : 'Dark mode'}
+      fontSize='sm'
+    >
+      <IconButton
+        aria-label='Toggle color mode'
+        icon={colorMode === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+        onClick={toggleColorMode}
+        variant='ghost'
+        borderRadius='full'
+        size='sm'
+      />
+    </Tooltip>
   );
 }

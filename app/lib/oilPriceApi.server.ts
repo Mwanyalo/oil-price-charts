@@ -91,13 +91,10 @@ async function apiFetch(path: string, params: Record<string, string> = {}) {
 export async function fetchLatestPrices(
   codes: string[],
 ): Promise<Record<string, HistoryPoint>> {
-  const json = hasApiKey()
-    ? await apiFetch('/prices/latest', { by_code: codes.join(',') })
-    : await apiFetch('/demo/prices');
+  const json = await apiFetch('/prices/latest', { by_code: codes.join(',') });
 
-  const rows: RawPricePoint[] = hasApiKey()
-    ? (json.data?.prices ?? (json.data?.code ? [json.data] : []))
-    : (json.data?.prices ?? []);
+  const rows: RawPricePoint[] =
+    json.data?.prices ?? (json.data?.code ? [json.data] : []);
 
   const out: Record<string, HistoryPoint> = {};
   for (const row of rows) {

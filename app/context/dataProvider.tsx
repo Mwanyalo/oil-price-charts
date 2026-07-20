@@ -5,7 +5,6 @@ import {
   useEffect,
   useId,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import { DATASOURCES, type DataSourceId } from '../data/datasources';
@@ -22,7 +21,6 @@ interface Entry {
   params: unknown;
   snapshot: Snapshot;
   listeners: Set<() => void>;
-  /** subscriberId -> requested poll interval in ms (0 = no polling, just fetch once) */
   subscribers: Map<string, number>;
   timer: ReturnType<typeof setInterval> | null;
   inFlight: Promise<void> | null;
@@ -38,7 +36,7 @@ const GLOBAL_POLLING_KEY = 'live-polling:enabled';
  * Two cross-cutting controls sit above individual subscriptions:
  *  - tab visibility: polling pauses while the tab is hidden, and does one
  *    catch-up fetch per active key when it becomes visible again
- *  - a global on/off switch (Settings), for killing all polling at once —
+ *  - a global on/off switch (Settings), for killing all polling at once 
  *    useful on a metered free-tier API budget
  */
 class DataStore {
@@ -271,7 +269,7 @@ export interface UseLiveDataOptions<T> {
 }
 
 /**
- * Subscribe to a named datasource. No fetcher to write — the provider resolves
+ * Subscribe to a named datasource. No fetcher to write the provider resolves
  * `sourceId` against the registry and fetches internally. Multiple components
  * requesting the same sourceId+params share one cached entry and one poll
  * timer (running at the fastest interval any of them asked for), and polling

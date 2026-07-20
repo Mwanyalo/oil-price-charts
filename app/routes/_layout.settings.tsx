@@ -1,7 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Box, Button, Flex, Heading, Switch, Text } from '@chakra-ui/react';
+import {
+  Box,
+  Button,
+  Card,
+  CardBody,
+  Flex,
+  Heading,
+  Switch,
+  Text,
+} from '@chakra-ui/react';
 import { useWatchlist } from '../context/watchlist';
 import { useCatalog } from '../context/catalog';
+import { humanizeCategory } from '~/data/catalog';
 
 function Section({
   title,
@@ -11,30 +21,27 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <Box
-      bg='var(--surface)'
-      border='1.5px solid var(--border)'
-      borderRadius='10px'
-      padding='1rem 1.1rem'
-    >
-      <Text
-        color='var(--text-muted)'
-        fontSize='0.75rem'
-        textTransform='uppercase'
-        letterSpacing='0.04em'
-        marginBottom='10px'
-      >
-        {title}
-      </Text>
-      <Flex
-        direction='column'
-        gap='10px'
-        borderTop='1px solid var(--border)'
-        paddingTop='12px'
-      >
-        {children}
-      </Flex>
-    </Box>
+    <Card>
+      <CardBody>
+        <Text
+          color='var(--text-muted)'
+          fontSize='0.75rem'
+          textTransform='uppercase'
+          letterSpacing='0.04em'
+          marginBottom='10px'
+        >
+          {title}
+        </Text>
+        <Flex
+          direction='column'
+          gap='10px'
+          borderTop='1px solid var(--border)'
+          paddingTop='12px'
+        >
+          {children}
+        </Flex>
+      </CardBody>
+    </Card>
   );
 }
 
@@ -93,7 +100,9 @@ export default function Settings() {
         <Flex direction='column' gap='8px'>
           {codes.map((code) => (
             <Row key={code}>
-              <Text fontSize='0.85rem'>{byCode[code]?.name || code}</Text>
+              <Text fontSize='0.85rem'>
+                {byCode[code]?.name || humanizeCategory(code)}
+              </Text>
               <Button
                 isDisabled={codes.length <= 1}
                 onClick={() => untrack(code)}
@@ -108,7 +117,7 @@ export default function Settings() {
                 color='var(--text-primary)'
                 _hover={{ bg: 'var(--border)' }}
               >
-                Untrack
+               - Untrack
               </Button>
             </Row>
           ))}

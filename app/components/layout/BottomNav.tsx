@@ -18,7 +18,7 @@ export function BottomNav() {
       zIndex={20}
       display={{ base: 'flex', md: 'none' }}
     >
-      {NAV_ITEMS.map(({ to, label, icon, end }) => (
+      {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
         <Box
           key={to}
           as={NavLink}
@@ -31,13 +31,12 @@ export function BottomNav() {
           gap="2px"
           textDecoration="none"
           color="var(--text-muted)"
-          fontSize="0.62rem"
           fontWeight={600}
           padding="4px 0"
           sx={{ '&.active': { color: 'var(--brand)' } }}
         >
           <Text as="span" aria-hidden fontSize="1.1rem">
-            {icon}
+              <Icon size={14} />
           </Text>
           <Text as="span">{label}</Text>
         </Box>

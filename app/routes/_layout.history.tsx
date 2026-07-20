@@ -99,6 +99,8 @@ export default function History({ loaderData }: Route.ComponentProps) {
       }
     : null;
 
+    console.log(chartData)
+
   return (
     <Flex direction='column' gap='1.5rem'>
       <Flex justify='space-between' wrap='wrap' gap='12px'>
