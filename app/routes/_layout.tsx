@@ -1,4 +1,5 @@
 import { Outlet } from 'react-router';
+import { Box, Flex } from '@chakra-ui/react';
 import type { Route } from './+types/_layout';
 import { Sidebar } from '../components/layout/Sidebar';
 import { BottomNav } from '../components/layout/BottomNav';
@@ -41,28 +42,66 @@ function Shell({
   const colors = buildColorMap(codes);
 
   return (
-    <div className='app-shell'>
+    <Flex align='stretch' minHeight='100vh'>
       <Sidebar />
-      <div className='app-main'>
+      <Box flex={1} minWidth={0}>
         <TopBar lastUpdated={null} />
         {!hasApiKey && (
-          <div className='api-key-banner'>
-            For latest prices. Set <code>OILPRICEAPI_KEY</code> in{' '}
-            <code>.env</code> for the live catalog and history.
-          </div>
+          <Box
+            fontSize='0.78rem'
+            color='var(--text-muted)'
+            bg='var(--surface)'
+            borderBottom='1px solid var(--border)'
+            padding={{ base: '0.6rem 1.5rem', md: '0.6rem 2rem' }}
+          >
+            For latest prices. Set{' '}
+            <Box
+              as='code'
+              fontFamily='var(--font-mono)'
+              bg='var(--border)'
+              padding='1px 5px'
+              borderRadius='4px'
+              color='var(--text-primary)'
+            >
+              OILPRICEAPI_KEY
+            </Box>{' '}
+            in{' '}
+            <Box
+              as='code'
+              fontFamily='var(--font-mono)'
+              bg='var(--border)'
+              padding='1px 5px'
+              borderRadius='4px'
+              color='var(--text-primary)'
+            >
+              .env
+            </Box>{' '}
+            for the live catalog and history.
+          </Box>
         )}
         {catalogError && (
-          <div className='api-key-banner'>
+          <Box
+            fontSize='0.78rem'
+            color='var(--text-muted)'
+            bg='var(--surface)'
+            borderBottom='1px solid var(--border)'
+            padding={{ base: '0.6rem 1.5rem', md: '0.6rem 2rem' }}
+          >
             Live catalog unavailable: {catalogError}
-          </div>
+          </Box>
         )}
         <TickerTape codes={codes} colors={colors} />
-        <main className='app-content'>
+        <Box
+          as='main'
+          margin='0 auto'
+          padding={{ base: '1.5rem', md: '1.5rem 2rem' }}
+          paddingBottom={{ base: '84px', md: '2rem' }}
+        >
           <Outlet />
-        </main>
-      </div>
+        </Box>
+      </Box>
       <BottomNav />
-    </div>
+    </Flex>
   );
 }
 

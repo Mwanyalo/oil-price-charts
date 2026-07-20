@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { formatRelativeTime } from "../../data/priceFormat";
+import { useEffect, useState } from 'react';
+import { Box, HStack, Text } from '@chakra-ui/react';
+import { formatRelativeTime } from '../../data/priceFormat';
 
 interface LiveBadgeProps {
   live: boolean;
@@ -15,19 +16,23 @@ export function LiveBadge({ live, lastUpdated }: LiveBadgeProps) {
   }, []);
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          background: live ? "#5fa87c" : "#5a5a5f",
-        }}
-        className={live ? "pulse-dot" : undefined}
+    <HStack spacing={1.5} display="inline-flex" alignItems="center">
+      <Box
+        as="span"
+        width="6px"
+        height="6px"
+        borderRadius="50%"
+        bg={live ? '#5fa87c' : '#5a5a5f'}
+        className={live ? 'pulse-dot' : undefined}
       />
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.78rem", color: "#8b8b90" }}>
-        {live ? "LIVE" : "PAUSED"} · {formatRelativeTime(lastUpdated)}
-      </span>
-    </span>
+      <Text
+        as="span"
+        fontFamily="var(--font-mono)"
+        fontSize="0.78rem"
+        color="#8b8b90"
+      >
+        {live ? 'LIVE' : 'PAUSED'} · {formatRelativeTime(lastUpdated)}
+      </Text>
+    </HStack>
   );
 }

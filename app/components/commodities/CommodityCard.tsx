@@ -1,5 +1,13 @@
-import type { Commodity } from '../../data/catalog';
-import { humanizeCategory } from '../../data/catalog';
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  CardBody,
+  Flex,
+  Text,
+} from '@chakra-ui/react';
+import { humanizeCategory, type Commodity } from '../../data/catalog';
 
 interface CommodityCardProps {
   commodity: Commodity;
@@ -7,6 +15,24 @@ interface CommodityCardProps {
   disabled?: boolean;
   disabledReason?: string;
   onToggle: () => void;
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <Badge
+      display='inline-block'
+      padding='2px 8px'
+      borderRadius='999px'
+      bg='var(--border)'
+      color='var(--text-muted)'
+      fontSize='0.65rem'
+      fontWeight={600}
+      whiteSpace='nowrap'
+      textTransform='none'
+    >
+      {children}
+    </Badge>
+  );
 }
 
 export function CommodityCard({
@@ -17,74 +43,53 @@ export function CommodityCard({
   onToggle,
 }: CommodityCardProps) {
   return (
-    <div
-      className='card'
-      style={{ borderColor: tracked ? '#8f5432' : undefined }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'start',
-          marginBottom: 6,
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
-            {commodity.name}
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.75rem',
-              color: '#8b8b90',
+    <Card>
+      <CardBody>
+        <Flex justify='space-between' align='start' marginBottom='6px'>
+          <Box>
+            <Text fontWeight={600} fontSize='0.9rem'>
+              {commodity.name}
+            </Text>
+          </Box>
+          <Pill>{humanizeCategory(commodity.category)}</Pill>
+        </Flex>
+        <Text fontSize='0.78rem' color='#8b8b90' minHeight='34px' marginTop={0}>
+          {commodity.description}
+        </Text>
+        <Flex justify='space-between' align='center' paddingTop='4px' gap='6px'>
+          <Text
+            fontSize='0.68rem'
+            color='#8b8b90'
+            fontFamily='var(--font-mono)'
+          >
+            per {commodity.unit}
+          </Text>
+          {commodity.updateFrequency && (
+            <Pill>{commodity.updateFrequency}</Pill>
+          )}
+          <Button
+            onClick={onToggle}
+            isDisabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            fontFamily='var(--font-body)'
+            fontWeight={600}
+            fontSize='0.78rem'
+            padding='0.35rem 0.7rem'
+            height='auto'
+            borderRadius='6px'
+            border='1px solid'
+            borderColor={tracked ? 'var(--border)' : 'var(--brand)'}
+            bg={tracked ? 'transparent' : 'var(--brand)'}
+            color={tracked ? 'var(--text-primary)' : 'white'}
+            _hover={{
+              bg: tracked ? 'var(--border)' : 'var(--brand)',
+              opacity: tracked ? 1 : 0.9,
             }}
           >
-            {commodity.code}
-          </div>
-        </div>
-        <span className='badge'>{humanizeCategory(commodity.category)}</span>
-      </div>
-      <p
-        style={{
-          fontSize: '0.78rem',
-          color: '#8b8b90',
-          minHeight: 34,
-          marginTop: 0,
-        }}
-      >
-        {commodity.description}
-      </p>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          paddingTop: 4,
-          gap: 6,
-        }}
-      >
-        <span
-          style={{
-            fontSize: '0.68rem',
-            color: '#8b8b90',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
-          per {commodity.unit}
-        </span>
-        {commodity.updateFrequency && (
-          <span className='badge'>{commodity.updateFrequency}</span>
-        )}
-        <button
-          className={`btn${tracked ? ' btn-outline' : ''}`}
-          onClick={onToggle}
-          disabled={disabled}
-          title={disabled ? disabledReason : undefined}
-        >
-          {tracked ? '− Untrack' : '+ Track'}
-        </button>
-      </div>
-    </div>
+            {tracked ? '− Untrack' : '+ Track'}
+          </Button>
+        </Flex>
+      </CardBody>
+    </Card>
   );
 }

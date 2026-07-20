@@ -1,12 +1,23 @@
-import { useId, useRef, useState } from 'react';
+import { useId } from 'react';
+import {
+  AreaChart,
+  Area,
+  ResponsiveContainer,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from 'recharts';
 import type { HistoryPoint } from '../../data/priceFormat';
 import { formatPrice } from '../../data/priceFormat';
+import { Box, Text } from '@chakra-ui/react';
+import { LineLoader } from '../ui/LineLoader';
 
 interface TrendChartProps {
   data?: HistoryPoint[] | null;
   color?: string;
   currency?: string;
   height?: number;
+  loading?: boolean;
 }
 
 function formatPointTime(value: string) {
@@ -21,86 +32,84 @@ function formatPointTime(value: string) {
       }).format(date);
 }
 
+function ChartTooltip({
+  active,
+  payload,
+  currency,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: HistoryPoint }>;
+  currency?: string;
+}) {
+  if (!active || !payload || !payload.length) return null;
+  const point = payload[0].payload;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        padding: '6px 8px',
+        borderRadius: 6,
+        background: 'var(--text-primary)',
+        color: 'var(--canvas)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.7rem',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <strong>{formatPrice(point.price, currency)}</strong>
+      <span
+        style={{
+          opacity: 0.72,
+          fontFamily: 'var(--font-body)',
+          fontSize: '0.65rem',
+        }}
+      >
+        {formatPointTime(point.time)}
+      </span>
+    </div>
+  );
+}
+
 export function TrendChart({
   data,
   color = '#E8672E',
   currency = 'USD',
   height = 220,
+  loading = false,
 }: TrendChartProps) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const gradientId = useId();
+  const rawId = useId();
+  const gradientId = `trend-${rawId.replace(/[^a-zA-Z0-9]/g, '')}`;
+
   if (!data || data.length < 2)
     return (
-      <div
-        style={{
-          height,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#6b6b70',
-        }}
+      <Box
+        position='relative'
+        height={height}
+        display='flex'
+        alignItems='center'
+        justifyContent='center'
       >
-        Not enough data
-      </div>
+        <LineLoader active={loading} />
+        <Text color='textMuted' fontSize='sm'>
+          {loading ? 'Loading…' : 'No data yet.'}
+        </Text>
+      </Box>
     );
 
-  const width = 800,
-    padding = 28,
-    prices = data.map((d) => d.price);
-  const min = Math.min(...prices),
-    max = Math.max(...prices),
-    range = max - min || 1,
-    innerH = height - padding * 2;
-  const points = data.map((d, i) => ({
-    x: (i / (data.length - 1)) * width,
-    y: padding + innerH - ((d.price - min) / range) * innerH,
-  }));
-  const linePath = points
-    .map(
-      (point, i) =>
-        `${i ? 'L' : 'M'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`,
-    )
-    .join(' ');
-  const areaPath = `${linePath} L ${width} ${height - padding} L 0 ${height - padding} Z`;
-  const active =
-    activeIndex === null
-      ? null
-      : { point: points[activeIndex], data: data[activeIndex] };
-  const selectFromPointer = (clientX: number) => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setActiveIndex(
-      Math.max(
-        0,
-        Math.min(
-          data.length - 1,
-          Math.round(((clientX - rect.left) / rect.width) * (data.length - 1)),
-        ),
-      ),
-    );
-  };
+  const prices = data.map((d) => d.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const pad = (max - min) * 0.05 || 1;
 
   return (
-    <div>
-      <div style={{ position: 'relative' }}>
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${width} ${height}`}
-          width='100%'
-          height={height}
-          preserveAspectRatio='none'
-          role='img'
-          aria-label='Interactive price trend. Move across the chart to inspect a point.'
-          tabIndex={0}
-          onPointerMove={(event) => selectFromPointer(event.clientX)}
-          onPointerLeave={() => setActiveIndex(null)}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowLeft')
-              setActiveIndex((i) => Math.max(0, (i ?? data.length - 1) - 1));
-            if (event.key === 'ArrowRight')
-              setActiveIndex((i) => Math.min(data.length - 1, (i ?? -1) + 1));
-          }}
+    <Box position='relative'>
+      <LineLoader active={loading} />
+      <ResponsiveContainer width='100%' height={height}>
+        <AreaChart
+          data={data}
+          margin={{ top: 8, right: 0, bottom: 8, left: 0 }}
         >
           <defs>
             <linearGradient id={gradientId} x1='0' y1='0' x2='0' y2='1'>
@@ -108,52 +117,36 @@ export function TrendChart({
               <stop offset='100%' stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
-          {[0.25, 0.5, 0.75].map((f) => (
-            <line
-              key={f}
-              x1={0}
-              x2={width}
-              y1={padding + innerH * f}
-              y2={padding + innerH * f}
-              stroke='#27272a'
-              strokeWidth={1}
-            />
-          ))}
-          <path d={areaPath} fill={`url(#${gradientId})`} stroke='none' />
-          <path d={linePath} fill='none' stroke={color} strokeWidth={2} />
-          {active && (
-            <>
-              <line
-                x1={active.point.x}
-                x2={active.point.x}
-                y1={padding}
-                y2={height - padding}
-                stroke='#8b8b90'
-                strokeDasharray='4 4'
-              />
-              <circle
-                cx={active.point.x}
-                cy={active.point.y}
-                r={5}
-                fill='var(--surface)'
-                stroke={color}
-                strokeWidth={2.5}
-              />
-            </>
-          )}
-        </svg>
-        {active && (
-          <div
-            className='chart-tooltip'
-            style={{
-              left: `${Math.min(88, Math.max(2, (active.point.x / width) * 100))}%`,
+          <CartesianGrid
+            horizontal
+            vertical={false}
+            stroke='#27272a'
+            strokeWidth={1}
+          />
+          <YAxis hide domain={[min - pad, max + pad]} />
+          <Tooltip
+            content={(props: any) => (
+              <ChartTooltip {...props} currency={currency} />
+            )}
+            cursor={{ stroke: '#8b8b90', strokeDasharray: '4 4' }}
+          />
+          <Area
+            type='linear'
+            dataKey='price'
+            stroke={color}
+            strokeWidth={2}
+            fill={`url(#${gradientId})`}
+            isAnimationActive={false}
+            dot={false}
+            activeDot={{
+              r: 5,
+              fill: 'var(--surface)',
+              stroke: color,
+              strokeWidth: 2.5,
             }}
-          >
-            <strong>{formatPrice(active.data.price, currency)}</strong>
-            <span>{formatPointTime(active.data.time)}</span>
-          </div>
-        )}
-      </div>
+          />
+        </AreaChart>
+      </ResponsiveContainer>
       <div
         style={{
           display: 'flex',
@@ -166,6 +159,6 @@ export function TrendChart({
         <span>{formatPrice(min, currency)}</span>
         <span>{formatPrice(max, currency)}</span>
       </div>
-    </div>
+    </Box>
   );
 }

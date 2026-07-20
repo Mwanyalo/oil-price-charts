@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Box, Flex, Heading, Input, SimpleGrid, Text } from '@chakra-ui/react';
 import { CategoryTabs } from '../components/commodities/CategoryTabs';
 import { CommodityCard } from '../components/commodities/CommodityCard';
 import { useWatchlist } from '../context/watchlist';
@@ -27,59 +28,56 @@ export default function Markets() {
   }, [category, search, commodities]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
-      <div>
-        <h1 style={{ fontSize: '1.5rem' }}>Markets</h1>
-        <p className='muted' style={{ fontSize: '0.85rem', marginTop: 4 }}>
-          A search catalog from OilPriceAPI. Track any instrument to
-          add it to your dashboard or history.
-        </p>
+    <Flex direction="column" gap="1.75rem">
+      <Box>
+        <Heading>Markets</Heading>
+        <Text color="var(--text-muted)" fontSize="0.85rem" marginTop="4px">
+          A search catalog from OilPriceAPI. Track any instrument to add it
+          to your dashboard or history.
+        </Text>
         {isLoading && (
-          <p className='muted' style={{ fontSize: '0.8rem' }}>
+          <Text color="var(--text-muted)" fontSize="0.8rem">
             Loading live catalog...
-          </p>
+          </Text>
         )}
         {error && (
-          <p className='muted' style={{ fontSize: '0.8rem' }}>
+          <Text color="var(--text-muted)" fontSize="0.8rem">
             Live catalog unavailable: {error}
-          </p>
+          </Text>
         )}
-      </div>
-      <div>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'end',
-            flexWrap: 'wrap',
-            gap: 10,
-            marginBottom: 12,
-          }}
+      </Box>
+      <Box>
+        <Flex
+          justify="space-between"
+          align="end"
+          wrap="wrap"
+          gap="10px"
+          marginBottom="12px"
         >
-          <p className='muted' style={{ fontSize: '0.8rem', margin: 0 }}>
+          <Text color="var(--text-muted)" fontSize="0.8rem" margin={0}>
             {commodities.length} commodities available · tracking {codes.length}
             /{maxSize}
-          </p>
-          <input
-            placeholder='Search commodities...'
+          </Text>
+          <Input
+            placeholder="Search commodities..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ width: 220 }}
+            width="220px"
           />
-        </div>
-        <div style={{ marginBottom: 16 }}>
+        </Flex>
+        <Box marginBottom="16px">
           <CategoryTabs
             categories={categories}
             active={category}
             onChange={setCategory}
           />
-        </div>
+        </Box>
         {filtered.length === 0 && (
-          <p className='muted' style={{ fontSize: '0.85rem' }}>
+          <Text color="var(--text-muted)" fontSize="0.85rem">
             No commodities match that search.
-          </p>
+          </Text>
         )}
-        <div className='grid grid-3'>
+        <SimpleGrid columns={{ base: 1, lg: 3 }} spacing="1rem">
           {filtered.map((commodity) => {
             const tracked = isTracked(commodity.code);
             const disabled = tracked ? codes.length <= 1 : atLimit;
@@ -98,8 +96,8 @@ export default function Markets() {
               />
             );
           })}
-        </div>
-      </div>
-    </div>
+        </SimpleGrid>
+      </Box>
+    </Flex>
   );
 }

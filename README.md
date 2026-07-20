@@ -22,8 +22,8 @@ npm install
 2. Create a `.env` file in the project root with these values:
 
 ```
-VITE_OILPRICE_API_KEY=your_api_key_here
-VITE_BASE_API=https://api.oilpriceapi.com
+OILPRICEAPI_KEY=your_api_key_here
+BASE_API=https://api.oilpriceapi.com/v1
 ```
 
 Get a free API key at https://www.oilpriceapi.com/ (or use your own provider).

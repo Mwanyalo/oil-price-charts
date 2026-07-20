@@ -1,4 +1,15 @@
 import { Form, useNavigation, useSubmit } from 'react-router';
+import {
+  Box,
+  Button,
+  Card,
+  CardBody,
+  Flex,
+  Heading,
+  Select,
+  SimpleGrid,
+  Text,
+} from '@chakra-ui/react';
 import type { Route } from './+types/_layout.history';
 import { TrendChart } from '../components/charts/TrendChart';
 import { useWatchlist } from '../context/watchlist';
@@ -27,11 +38,40 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
+function StatBlock({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'up' | 'down';
+}) {
+  const color =
+    tone === 'up' ? '#5fa87c' : tone === 'down' ? '#c96b6b' : undefined;
+  return (
+    <Card>
+      <CardBody>
+        <Text color='var(--text-muted)' fontSize='0.72rem' marginBottom='4px'>
+          {label}
+        </Text>
+        <Text
+          fontFamily='var(--font-mono)'
+          fontWeight={700}
+          fontSize='1.05rem'
+          color={color}
+        >
+          {value}
+        </Text>
+      </CardBody>
+    </Card>
+  );
+}
+
 export default function History({ loaderData }: Route.ComponentProps) {
   const { codes } = useWatchlist();
   const { byCode } = useCatalog();
   const submit = useSubmit();
-  const navigation = useNavigation();
   const { code, range } = loaderData;
   const selectedCode = code || codes[0] || '';
   const meta = byCode[selectedCode];
@@ -60,48 +100,38 @@ export default function History({ loaderData }: Route.ComponentProps) {
     : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 12,
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: '1.5rem' }}>History</h1>
-          <p className='muted' style={{ fontSize: '0.85rem', marginTop: 4 }}>
+    <Flex direction='column' gap='1.5rem'>
+      <Flex justify='space-between' wrap='wrap' gap='12px'>
+        <Box>
+          <Heading fontSize='1.5rem'>History</Heading>
+          <Text color='var(--text-muted)' fontSize='0.85rem' marginTop='4px'>
             A single fetch per range change no live polling needed for a
             backward looking view.
-          </p>
-        </div>
+          </Text>
+        </Box>
         <Form
           method='get'
           style={{ display: 'flex', gap: 8 }}
           onChange={(event) => submit(event.currentTarget)}
         >
-          <select name='code' defaultValue={selectedCode}>
+          <Select name='code' defaultValue={selectedCode} width='auto'>
             {codes.map((value) => (
               <option key={value} value={value}>
                 {byCode[value]?.name || value}
               </option>
             ))}
-          </select>
-          <select name='range' defaultValue={range}>
+          </Select>
+          <Select name='range' defaultValue={range} width='auto'>
             {RANGE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
-          </select>
+          </Select>
         </Form>
-      </div>
+      </Flex>
       {stats && (
-        <div
-          className='grid grid-stats'
-          style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}
-        >
+        <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
           <StatBlock
             label='High'
             value={formatPrice(stats.high, meta?.currency)}
@@ -119,88 +149,65 @@ export default function History({ loaderData }: Route.ComponentProps) {
             value={formatPercent(stats.changePct)}
             tone={stats.changePct >= 0 ? 'up' : 'down'}
           />
-        </div>
+        </SimpleGrid>
       )}
-      <div
-        className='card'
-        style={{ opacity: navigation.state !== 'idle' ? 0.6 : 1 }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 12,
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: accent,
-              }}
+      <Card>
+        <CardBody>
+          <Flex
+            justify='space-between'
+            align='center'
+            wrap='wrap'
+            gap='12px'
+            marginBottom='16px'
+          >
+            <Flex align='center' gap='8px'>
+              <Box width='8px' height='8px' borderRadius='50%' bg={accent} />
+              <Heading fontSize='1rem'>
+                {meta?.name || selectedCode} —{' '}
+                {RANGE_OPTIONS.find((option) => option.value === range)?.label}
+              </Heading>
+            </Flex>
+            <Flex align='center' gap='10px'>
+              <Text
+                fontFamily='var(--font-mono)'
+                color='var(--text-muted)'
+                fontSize='0.72rem'
+              >
+                ON DEMAND
+              </Text>
+              <Button
+                onClick={() => refresh()}
+                isDisabled={isFetching}
+                fontFamily='var(--font-body)'
+                fontWeight={600}
+                fontSize='0.78rem'
+                padding='0.35rem 0.7rem'
+                height='auto'
+                borderRadius='6px'
+                border='1px solid var(--border)'
+                bg='transparent'
+                color='var(--text-primary)'
+                _hover={{ bg: 'var(--border)' }}
+              >
+                {isFetching ? 'Refreshing...' : 'Refresh'}
+              </Button>
+            </Flex>
+          </Flex>
+          {errorMessage ? (
+            <Text color='var(--text-muted)' fontSize='0.85rem'>
+              {errorMessage}
+            </Text>
+          ) : (
+            <TrendChart
+              data={chartData}
+              color={accent}
+              currency={meta?.currency}
+              height={320}
+              loading={isFetching}
             />
-            <h3 style={{ fontSize: '1rem' }}>
-              {meta?.name || selectedCode} —{' '}
-              {RANGE_OPTIONS.find((option) => option.value === range)?.label}
-            </h3>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span className='mono muted' style={{ fontSize: '0.72rem' }}>
-              ON DEMAND
-            </span>
-            <button
-              className='btn btn-outline'
-              onClick={() => refresh()}
-              disabled={isFetching}
-            >
-              {isFetching ? 'Refreshing...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-        {errorMessage ? (
-          <p className='muted' style={{ fontSize: '0.85rem' }}>
-            {errorMessage}
-          </p>
-        ) : (
-          <TrendChart
-            data={chartData}
-            color={accent}
-            currency={meta?.currency}
-            height={320}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatBlock({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: 'up' | 'down';
-}) {
-  const color =
-    tone === 'up' ? '#5fa87c' : tone === 'down' ? '#c96b6b' : undefined;
-  return (
-    <div className='card'>
-      <div className='muted' style={{ fontSize: '0.72rem', marginBottom: 4 }}>
-        {label}
-      </div>
-      <div
-        className='mono'
-        style={{ fontWeight: 700, fontSize: '1.05rem', color }}
-      >
-        {value}
-      </div>
-    </div>
+          )}
+        </CardBody>
+      </Card>
+    </Flex>
   );
 }

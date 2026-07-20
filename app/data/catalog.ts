@@ -33,6 +33,6 @@ export function buildColorMap(codes: string[]): Record<string, string> {
 export function humanizeCategory(slug: string): string {
   return slug
     .split('_')
-    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .map((w) => w[0]?.toUpperCase() + w.slice(1))
     .join(' ');
 }

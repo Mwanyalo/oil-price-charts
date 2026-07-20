@@ -1,24 +1,47 @@
 import { NavLink } from 'react-router';
+import { Box, Flex, Text } from '@chakra-ui/react';
 import { NAV_ITEMS } from './navConfig';
 
 export function BottomNav() {
   return (
-    <nav aria-label='Primary' className='bottom-nav'>
+    <Flex
+      as="nav"
+      aria-label="Primary"
+      justify="space-around"
+      position="fixed"
+      bottom={0}
+      left={0}
+      right={0}
+      bg="var(--surface)"
+      borderTop="1px solid var(--border)"
+      padding="6px 0 max(6px, env(safe-area-inset-bottom))"
+      zIndex={20}
+      display={{ base: 'flex', md: 'none' }}
+    >
       {NAV_ITEMS.map(({ to, label, icon, end }) => (
-        <NavLink
+        <Box
           key={to}
+          as={NavLink}
           to={to}
           end={end}
-          className={({ isActive }) =>
-            `bottom-nav-link${isActive ? ' active' : ''}`
-          }
+          flex={1}
+          display="flex"
+          flexDirection="column"
+          alignItems="center"
+          gap="2px"
+          textDecoration="none"
+          color="var(--text-muted)"
+          fontSize="0.62rem"
+          fontWeight={600}
+          padding="4px 0"
+          sx={{ '&.active': { color: 'var(--brand)' } }}
         >
-          <span aria-hidden style={{ fontSize: '1.1rem' }}>
+          <Text as="span" aria-hidden fontSize="1.1rem">
             {icon}
-          </span>
-          <span>{label}</span>
-        </NavLink>
+          </Text>
+          <Text as="span">{label}</Text>
+        </Box>
       ))}
-    </nav>
+    </Flex>
   );
 }

@@ -1,4 +1,13 @@
 import { useEffect, useState } from 'react';
+import {
+  Box,
+  Card,
+  CardBody,
+  Flex,
+  Heading,
+  SimpleGrid,
+  Text,
+} from '@chakra-ui/react';
 import type { Route } from './+types/_layout._index';
 import { StatCard } from '../components/ui/StatCard';
 import { TrendChart } from '../components/charts/TrendChart';
@@ -18,60 +27,6 @@ interface SeriesResponse {
 
 export async function loader({}: Route.LoaderArgs) {
   return { series: {} as Record<string, HistoryPoint[]> };
-}
-
-export default function Dashboard({ loaderData }: Route.ComponentProps) {
-  const { codes, untrack } = useWatchlist();
-  const { byCode } = useCatalog();
-  const colorMap = buildColorMap(codes);
-  const [focused, setFocused] = useState(codes[0]);
-
-  useEffect(() => {
-    if (!codes.includes(focused)) setFocused(codes[0]);
-  }, [codes, focused]);
-
-  if (!codes.length) {
-    return (
-      <div>
-        <h1 style={{ fontSize: '1.5rem' }}>Dashboard</h1>
-        <p className='muted'>Waiting for the live OilPriceAPI catalog.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div>
-        <h1 style={{ fontSize: '1.5rem' }}>Dashboard</h1>
-        <p className='muted' style={{ fontSize: '0.85rem', marginTop: 4 }}>
-          Your watchlist refreshes every 20s. Tap a card to change the chart
-          below and manage what's tracked from Markets.
-        </p>
-      </div>
-
-      <div className='grid grid-3'>
-        {codes.map((code) => (
-          <LiveStatCard
-            key={code}
-            code={code}
-            accent={colorMap[code] || '#8A97A3'}
-            isFocused={focused === code}
-            onFocus={() => setFocused(code)}
-            onRemove={codes.length > 1 ? () => untrack(code) : undefined}
-            initialSeries={loaderData.series[code]}
-            meta={byCode[code]}
-          />
-        ))}
-      </div>
-
-      <FocusedChart
-        code={focused}
-        accent={colorMap[focused] || '#8A97A3'}
-        initialSeries={loaderData.series[focused]}
-        meta={byCode[focused]}
-      />
-    </div>
-  );
 }
 
 function LiveStatCard({
@@ -136,7 +91,12 @@ function FocusedChart({
   initialSeries?: HistoryPoint[];
   meta?: Commodity;
 }) {
-  const { data, error, lastUpdated } = useLiveData<SeriesResponse>(
+  const {
+    data,
+    error,
+    isLoading: loading,
+    lastUpdated,
+  } = useLiveData<SeriesResponse>(
     'series',
     { code, range: 'past_day' },
     {
@@ -151,44 +111,95 @@ function FocusedChart({
     data?.error || (error instanceof Error ? error.message : undefined);
 
   return (
-    <div className='card'>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 12,
-          marginBottom: 12,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: accent,
-            }}
+    <Card>
+      <CardBody>
+        <Flex
+          justify='space-between'
+          align='center'
+          wrap='wrap'
+          gap='12px'
+          marginBottom='12px'
+        >
+          <Flex align='center' gap='8px'>
+            <Box width='8px' height='8px' borderRadius='50%' bg={accent} />
+            <Heading fontSize='1rem'>{meta?.name || code} trend</Heading>
+          </Flex>
+          <LiveBadge
+            live
+            lastUpdated={
+              lastUpdated ? new Date(lastUpdated).toISOString() : null
+            }
           />
-          <h3 style={{ fontSize: '1rem' }}>{meta?.name || code} trend</h3>
-        </div>
-        <LiveBadge
-          live
-          lastUpdated={lastUpdated ? new Date(lastUpdated).toISOString() : null}
-        />
-      </div>
-      {errorMessage ? (
-        <p className='muted' style={{ fontSize: '0.8rem' }}>
-          {errorMessage}
-        </p>
-      ) : (
-        <TrendChart
-          data={data?.data}
-          color={accent}
-          currency={meta?.currency}
-        />
-      )}
-    </div>
+        </Flex>
+        {errorMessage ? (
+          <Text color='var(--text-muted)' fontSize='0.8rem'>
+            {errorMessage}
+          </Text>
+        ) : (
+          <TrendChart
+            data={data?.data}
+            color={accent}
+            currency={meta?.currency}
+            loading={loading}
+          />
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+export default function Dashboard({ loaderData }: Route.ComponentProps) {
+  const { codes, untrack } = useWatchlist();
+  const { byCode } = useCatalog();
+  const colorMap = buildColorMap(codes);
+  const [focused, setFocused] = useState(codes[0]);
+
+  useEffect(() => {
+    if (!codes.includes(focused)) setFocused(codes[0]);
+  }, [codes, focused]);
+
+  if (!codes.length) {
+    return (
+      <Box>
+        <Heading fontSize='1.5rem'>Dashboard</Heading>
+        <Text color='var(--text-muted)'>
+          Waiting for the live OilPriceAPI catalog.
+        </Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Flex direction='column' gap='1rem'>
+      <Box>
+        <Heading fontSize='1.5rem'>Dashboard</Heading>
+        <Text color='var(--text-muted)' fontSize='0.85rem' marginTop='4px'>
+          Tap a card to change the chart below and manage what's tracked from
+          Markets.
+        </Text>
+      </Box>
+
+      <SimpleGrid columns={{ base: 1, lg: 3 }} spacing='1rem'>
+        {codes.map((code) => (
+          <LiveStatCard
+            key={code}
+            code={code}
+            accent={colorMap[code] || '#8A97A3'}
+            isFocused={focused === code}
+            onFocus={() => setFocused(code)}
+            onRemove={codes.length > 1 ? () => untrack(code) : undefined}
+            initialSeries={loaderData.series[code]}
+            meta={byCode[code]}
+          />
+        ))}
+      </SimpleGrid>
+
+      <FocusedChart
+        code={focused}
+        accent={colorMap[focused] || '#8A97A3'}
+        initialSeries={loaderData.series[focused]}
+        meta={byCode[focused]}
+      />
+    </Flex>
   );
 }
