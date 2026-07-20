@@ -12,6 +12,7 @@ import {
 import { useWatchlist } from '../context/watchlist';
 import { useCatalog } from '../context/catalog';
 import { humanizeCategory } from '~/data/catalog';
+import { Minus } from 'lucide-react';
 
 function Section({
   title,
@@ -117,7 +118,10 @@ export default function Settings() {
                 color='var(--text-primary)'
                 _hover={{ bg: 'var(--border)' }}
               >
-               - Untrack
+                <>
+                  <Minus size={10} />
+                  <span>Untrack</span>
+                </>
               </Button>
             </Row>
           ))}

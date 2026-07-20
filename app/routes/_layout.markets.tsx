@@ -1,9 +1,19 @@
 import { useMemo, useState } from 'react';
-import { Box, Flex, Heading, Input, SimpleGrid, Text } from '@chakra-ui/react';
+import {
+  Box,
+  Flex,
+  Heading,
+  Input,
+  InputGroup,
+  InputLeftElement,
+  SimpleGrid,
+  Text,
+} from '@chakra-ui/react';
 import { CategoryTabs } from '../components/commodities/CategoryTabs';
 import { CommodityCard } from '../components/commodities/CommodityCard';
 import { useWatchlist } from '../context/watchlist';
 import { useCatalog } from '../context/catalog';
+import { Search } from 'lucide-react';
 
 export default function Markets() {
   const [category, setCategory] = useState<string | null>(null);
@@ -28,44 +38,48 @@ export default function Markets() {
   }, [category, search, commodities]);
 
   return (
-    <Flex direction="column" gap="1.75rem">
+    <Flex direction='column' gap='1.75rem'>
       <Box>
         <Heading>Markets</Heading>
-        <Text color="var(--text-muted)" fontSize="0.85rem" marginTop="4px">
-          A search catalog from OilPriceAPI. Track any instrument to add it
-          to your dashboard or history.
+        <Text color='var(--text-muted)' fontSize='0.85rem' marginTop='4px'>
+          A search catalog from OilPriceAPI. Track any instrument to add it to
+          your dashboard or history.
         </Text>
         {isLoading && (
-          <Text color="var(--text-muted)" fontSize="0.8rem">
+          <Text color='var(--text-muted)' fontSize='0.8rem'>
             Loading live catalog...
           </Text>
         )}
         {error && (
-          <Text color="var(--text-muted)" fontSize="0.8rem">
+          <Text color='var(--text-muted)' fontSize='0.8rem'>
             Live catalog unavailable: {error}
           </Text>
         )}
       </Box>
       <Box>
         <Flex
-          justify="space-between"
-          align="end"
-          wrap="wrap"
-          gap="10px"
-          marginBottom="12px"
+          justify='space-between'
+          align='end'
+          wrap='wrap'
+          gap='10px'
+          marginBottom='12px'
         >
-          <Text color="var(--text-muted)" fontSize="0.8rem" margin={0}>
+          <Text color='var(--text-muted)' fontSize='0.8rem' margin={0}>
             {commodities.length} commodities available · tracking {codes.length}
             /{maxSize}
           </Text>
-          <Input
-            placeholder="Search commodities..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            width="220px"
-          />
+          <InputGroup width='220px'>
+            <InputLeftElement pointerEvents='none'>
+              <Search size={16} className='text-gray-500' />
+            </InputLeftElement>
+            <Input
+              placeholder='Search commodities...'
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </InputGroup>
         </Flex>
-        <Box marginBottom="16px">
+        <Box marginBottom='16px'>
           <CategoryTabs
             categories={categories}
             active={category}
@@ -73,11 +87,11 @@ export default function Markets() {
           />
         </Box>
         {filtered.length === 0 && (
-          <Text color="var(--text-muted)" fontSize="0.85rem">
+          <Text color='var(--text-muted)' fontSize='0.85rem'>
             No commodities match that search.
           </Text>
         )}
-        <SimpleGrid columns={{ base: 1, lg: 3 }} spacing="1rem">
+        <SimpleGrid columns={{ base: 1, lg: 3 }} spacing='1rem'>
           {filtered.map((commodity) => {
             const tracked = isTracked(commodity.code);
             const disabled = tracked ? codes.length <= 1 : atLimit;

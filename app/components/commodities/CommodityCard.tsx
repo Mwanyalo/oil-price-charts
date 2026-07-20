@@ -8,6 +8,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { humanizeCategory, type Commodity } from '../../data/catalog';
+import { Minus, Plus } from 'lucide-react';
 
 interface CommodityCardProps {
   commodity: Commodity;
@@ -86,7 +87,17 @@ export function CommodityCard({
               opacity: tracked ? 1 : 0.9,
             }}
           >
-            {tracked ? '− Untrack' : '+ Track'}
+            {tracked ? (
+              <>
+                <Minus size={10} />
+                <span>Untrack</span>
+              </>
+            ) : (
+              <>
+                <Plus size={10} />
+                <span>Track</span>
+              </>
+            )}
           </Button>
         </Flex>
       </CardBody>
