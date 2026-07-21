@@ -29,6 +29,9 @@ if (!isProduction) {
 
 app.use(morgan('tiny'));
 
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
+app.get('/.well-known/*splat', (_req, res) => res.status(204).end());
+
 const build = viteDevServer
   ? () => viteDevServer.ssrLoadModule('virtual:react-router/server-build')
   : await import('./build/server/index.js');

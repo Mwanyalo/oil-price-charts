@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "react-router dev",
     "build": "react-router build",
@@ -11,7 +14,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "keywords": [],
-  "author": "",
+  "author": "Austine Mwanyalo",
   "license": "ISC",
   "dependencies": {
     "@chakra-ui/react": "^2.10.10",

@@ -55,36 +55,58 @@ async function apiFetch(path: string, params: Record<string, string> = {}) {
   );
 
   const key = process.env.OILPRICEAPI_KEY;
-  const res = await fetch(url.toString(), {
-    headers: key ? { Authorization: `Token ${key}` } : undefined,
-    signal: AbortSignal.timeout(8000),
-  });
+  const headers = key ? { Authorization: `Token ${key}` } : undefined;
+  const REQUEST_TIMEOUT_MS = 15000;
+  const MAX_ATTEMPTS = 2;
 
-  if (!res.ok) {
-    const payload = await res.json().catch(() => null);
-    const apiError = payload?.error;
-    if (res.status === 401)
-      throw new OilPriceApiError('Missing or invalid OILPRICEAPI_KEY', 401);
-    if (
-      res.status === 403 &&
-      apiError?.code === 'EMAIL_CONFIRMATION_REQUIRED'
-    ) {
-      throw new OilPriceApiError(
-        'OilPriceAPI requires email confirmation before serving more requests. Confirm your account at https://www.oilpriceapi.com/confirm',
-        403,
-      );
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url.toString(), {
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        const apiError = payload?.error;
+        if (res.status === 401)
+          throw new OilPriceApiError('Missing or invalid OILPRICEAPI_KEY', 401);
+        if (
+          res.status === 403 &&
+          apiError?.code === 'EMAIL_CONFIRMATION_REQUIRED'
+        ) {
+          throw new OilPriceApiError(
+            'OilPriceAPI requires email confirmation before serving more requests. Confirm your account at https://www.oilpriceapi.com/confirm',
+            403,
+          );
+        }
+        if (res.status === 429)
+          throw new OilPriceApiError(
+            'OilPriceAPI rate limit hit slow down polling',
+            429,
+          );
+        throw new OilPriceApiError(
+          apiError?.message || `OilPriceAPI request failed (${res.status})`,
+          res.status,
+        );
+      }
+      return await res.json();
+    } catch (error) {
+      lastError = error;
+      const isTimeout =
+        error instanceof Error &&
+        (error.name === 'TimeoutError' || error.name === 'AbortError');
+      if (isTimeout && attempt < MAX_ATTEMPTS) continue;
+      if (isTimeout) {
+        throw new OilPriceApiError(
+          'OilPriceAPI is taking longer to respond. This is usually temporary.',
+        );
+      }
+      throw error;
     }
-    if (res.status === 429)
-      throw new OilPriceApiError(
-        'OilPriceAPI rate limit hit slow down polling',
-        429,
-      );
-    throw new OilPriceApiError(
-      apiError?.message || `OilPriceAPI request failed (${res.status})`,
-      res.status,
-    );
   }
-  return res.json();
+  throw lastError;
 }
 
 /** Latest prices for the given codes. */

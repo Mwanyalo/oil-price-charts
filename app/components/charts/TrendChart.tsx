@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import type { HistoryPoint } from '../../data/priceFormat';
 import { formatPrice } from '../../data/priceFormat';
-import { Box, Spinner, Text, useColorModeValue } from '@chakra-ui/react';
+import { Box, Flex, Spinner, Text, useColorModeValue } from '@chakra-ui/react';
 import { LineLoader } from '../ui/LineLoader';
 import { formatClockTime } from '~/data/timeFormart';
 
@@ -183,18 +183,15 @@ export function TrendChart({
           />
         </AreaChart>
       </ResponsiveContainer>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: '0.75rem',
-          color: '#8b8b90',
-          marginTop: 4,
-        }}
+      <Flex
+        justify='space-between'
+        fontSize='0.75rem'
+        color='#8b8b90'
+        marginTop='4px'
       >
-        <span>{formatPrice(min, currency)}</span>
-        <span>{formatPrice(max, currency)}</span>
-      </div>
+        <Text as='span'>{formatPrice(min, currency)}</Text>
+        <Text as='span'>{formatPrice(max, currency)}</Text>
+      </Flex>
     </Box>
   );
 }

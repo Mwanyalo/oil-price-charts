@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
   Box,
+  Button,
   Card,
   CardBody,
   Flex,
   Heading,
+  HStack,
   SimpleGrid,
   Text,
 } from '@chakra-ui/react';
@@ -16,7 +18,11 @@ import { useWatchlist } from '../context/watchlist';
 import { useLiveData } from '../context/dataProvider';
 import { buildColorMap, type Commodity } from '../data/catalog';
 import { useCatalog } from '../context/catalog';
-import { seriesChange, type HistoryPoint } from '../data/priceFormat';
+import {
+  seriesChange,
+  type HistoryPoint,
+  type PriceRange,
+} from '../data/priceFormat';
 
 interface SeriesResponse {
   code: string;
@@ -24,6 +30,12 @@ interface SeriesResponse {
   data: HistoryPoint[];
   error?: string;
 }
+
+const CHART_RANGE_OPTIONS: { value: PriceRange; label: string }[] = [
+  { value: 'past_day', label: '24h' },
+  { value: 'past_week', label: '7d' },
+  { value: 'past_month', label: '30d' },
+];
 
 export async function loader({}: Route.LoaderArgs) {
   return { series: {} as Record<string, HistoryPoint[]> };
@@ -91,6 +103,8 @@ function FocusedChart({
   initialSeries?: HistoryPoint[];
   meta?: Commodity;
 }) {
+  const [range, setRange] = useState<PriceRange>('past_day');
+  const isIntraday = range === 'past_day';
   const {
     data,
     error,
@@ -98,12 +112,13 @@ function FocusedChart({
     lastUpdated,
   } = useLiveData<SeriesResponse>(
     'series',
-    { code, range: 'past_day' },
+    { code, range },
     {
-      live: { enabled: true, intervalMs: 60 * 1000 },
-      initialData: initialSeries
-        ? { code, range: 'past_day', data: initialSeries }
-        : undefined,
+      live: { enabled: isIntraday, intervalMs: 60 * 1000 },
+      initialData:
+        isIntraday && initialSeries
+          ? { code, range: 'past_day', data: initialSeries }
+          : undefined,
     },
   );
 
@@ -124,13 +139,47 @@ function FocusedChart({
             <Box width='8px' height='8px' borderRadius='50%' bg={accent} />
             <Heading fontSize='1rem'>{meta?.name || code} trend</Heading>
           </Flex>
-          <LiveBadge
-            live
-            lastUpdated={
-              lastUpdated ? new Date(lastUpdated).toISOString() : null
-            }
-          />
+
+          <Flex align='center' gap='12px' wrap='wrap'>
+            {isIntraday && (
+              <LiveBadge
+                live
+                lastUpdated={
+                  lastUpdated ? new Date(lastUpdated).toISOString() : null
+                }
+              />
+            )}
+            <HStack spacing={1}>
+              {CHART_RANGE_OPTIONS.map((option) => {
+                const isActive = option.value === range;
+                return (
+                  <Button
+                    key={option.value}
+                    onClick={() => setRange(option.value)}
+                    size='xs'
+                    height='auto'
+                    padding='0.3rem 0.6rem'
+                    borderRadius='999px'
+                    border='1px solid'
+                    borderColor={
+                      isActive ? 'var(--text-primary)' : 'var(--border)'
+                    }
+                    bg={isActive ? 'var(--text-primary)' : 'transparent'}
+                    color={isActive ? 'var(--canvas)' : 'var(--text-muted)'}
+                    fontSize='0.72rem'
+                    fontWeight={600}
+                    _hover={{
+                      bg: isActive ? 'var(--text-primary)' : 'var(--border)',
+                    }}
+                  >
+                    {option.label}
+                  </Button>
+                );
+              })}
+            </HStack>
+          </Flex>
         </Flex>
+
         {errorMessage ? (
           <Text color='var(--text-muted)' fontSize='0.8rem'>
             {errorMessage}

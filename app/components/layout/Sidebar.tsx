@@ -36,22 +36,23 @@ export function Sidebar() {
           as={NavLink}
           to={to}
           end={end}
-          display="flex"
-          alignItems="center"
-          gap="10px"
-          padding="0.6rem 0.75rem"
-          borderRadius="8px"
+          prefetch='viewport'
+          display='flex'
+          alignItems='center'
+          gap='10px'
+          padding='0.6rem 0.75rem'
+          borderRadius='8px'
           fontWeight={600}
-          color="var(--text-muted)"
-          textDecoration="none"
+          color='var(--text-muted)'
+          textDecoration='none'
           sx={{
             '&.active': { bg: 'var(--surface)', color: 'var(--brand)' },
           }}
         >
-          <Box as="span" aria-hidden>
-          <Icon size={14} />
+          <Box as='span' aria-hidden>
+            <Icon size={14} />
           </Box>
-          <Box as="span">{label}</Box>
+          <Box as='span'>{label}</Box>
         </Box>
       ))}
     </Flex>

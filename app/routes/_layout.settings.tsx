@@ -8,6 +8,7 @@ import {
   Heading,
   Switch,
   Text,
+  useColorMode,
 } from '@chakra-ui/react';
 import { useWatchlist } from '../context/watchlist';
 import { useCatalog } from '../context/catalog';
@@ -57,19 +58,7 @@ function Row({ children }: { children: React.ReactNode }) {
 export default function Settings() {
   const { codes, untrack, maxSize } = useWatchlist();
   const { byCode } = useCatalog();
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem('theme');
-    setTheme(stored === 'light' ? 'light' : 'dark');
-  }, []);
-
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    document.documentElement.setAttribute('data-theme', next);
-    window.localStorage.setItem('theme', next);
-  };
+  const { colorMode, toggleColorMode } = useColorMode();
 
   return (
     <Flex direction='column' gap='1.5rem'>
@@ -86,8 +75,8 @@ export default function Settings() {
             </Text>
           </Box>
           <Switch
-            isChecked={theme === 'dark'}
-            onChange={toggleTheme}
+            isChecked={colorMode === 'dark'}
+            onChange={toggleColorMode}
             colorScheme='orange'
           />
         </Row>
